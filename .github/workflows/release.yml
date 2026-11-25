@@ -1,20 +1,51 @@
 name: release
 
-# Push a tag such as v0.2.0 to build, (optionally) sign and publish a release.
+# Manual only: Actions -> release -> Run workflow, choose the branch to release
+# from and a version. The workflow builds, signs (when CODESIGN_* secrets exist),
+# and creates the GitHub release and its v<version> tag on that commit.
+# The workflow file must be on the default branch for the Run workflow button to appear.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the leading v (for example 0.2.0 or 0.2.0-rc1)"
+        required: true
+        type: string
+      draft:
+        description: "Create as a draft so you can review the assets before publishing"
+        type: boolean
+        default: true
+      prerelease:
+        description: "Mark as a pre-release"
+        type: boolean
+        default: false
 
 permissions:
-  contents: write       # create the release
+  contents: write       # create the release and tag
   id-token: write       # build provenance attestation
   attestations: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: windows-latest
     steps:
+      - name: Validate version
+        shell: pwsh
+        run: |
+          if ("${{ inputs.version }}" -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "version must look like 1.2.3 or 1.2.3-rc1" }
       - uses: actions/checkout@v4
+      - name: Refuse to overwrite an existing release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "v${{ inputs.version }}" 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "release v${{ inputs.version }} already exists" }
+          $global:LASTEXITCODE = 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -28,21 +59,34 @@ jobs:
         env:
           CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
           CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
-        run: .\scripts\build.ps1 -Version ("${{ github.ref_name }}".TrimStart("v"))
+        run: .\scripts\build.ps1 -Version "${{ inputs.version }}"
       - name: Checksums
         shell: pwsh
         run: |
           Set-Location dist
           Get-ChildItem *.exe | ForEach-Object { "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content SHA256SUMS.txt -Encoding ascii
           Get-Content SHA256SUMS.txt
+      # Attestations are free for public repositories; private repositories need
+      # GitHub Enterprise Cloud, so this step switches itself off when the repo goes private.
       - name: Attest build provenance
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             dist/*.exe
-      - name: Publish
+      - name: Create release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" dist/*.exe dist/SHA256SUMS.txt --generate-notes --title "${{ github.ref_name }}"
+          $flags = @()
+          if ("${{ inputs.draft }}" -eq "true") { $flags += "--draft" }
+          if ("${{ inputs.prerelease }}" -eq "true") { $flags += "--prerelease" }
+          gh release create "v${{ inputs.version }}" (Get-ChildItem dist\*.exe | ForEach-Object FullName) dist\SHA256SUMS.txt `
+            --target "${{ github.sha }}" --title "v${{ inputs.version }}" --generate-notes @flags
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-v${{ inputs.version }}
+          path: |
+            dist/*.exe
+            dist/SHA256SUMS.txt

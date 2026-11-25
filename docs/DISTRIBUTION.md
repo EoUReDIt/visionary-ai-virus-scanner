@@ -21,7 +21,11 @@ signed release that already had reputation. A browser-downloaded unsigned instal
 - `scripts/sign.ps1` Authenticode-signs the binaries *before* they are packed into the installer, then
   signs the installer, when a certificate is supplied. Without one it does nothing. CI proves the
   pipeline with a throwaway self-signed certificate on every run.
-- `release.yml` builds and publishes on a `v*` tag and picks up the secrets below automatically.
+- `release.yml` is **manual**: Actions -> release -> Run workflow, pick the branch and a version
+  (for example `0.2.0`). It builds, signs if the secrets below exist, writes `SHA256SUMS.txt` and creates the
+  release and its `v0.2.0` tag on that commit. It creates a **draft** by default so you can review the
+  assets before publishing, refuses to overwrite an existing release, and needs the workflow file on the
+  default branch for the button to appear.
 
 ## Options to get a real signature (pick one)
 | Option | Cost | Notes |
@@ -42,3 +46,14 @@ To use a PFX certificate add repository secrets `CODESIGN_PFX_BASE64` (base64 of
 3. Keep file names, version numbers and the publisher name stable between releases so reputation carries over.
 4. Never pack the executables (UPX etc.): packers raise detection rates.
 5. Document the warning in the release notes: "More info -> Run anyway", and publish the checksum.
+
+## When the repository becomes private
+- Releases keep working; assets are visible only to people with repository access, so public downloads
+  need another host (a public releases-only repository, a website, a package manager).
+- Build provenance attestations need GitHub Enterprise Cloud on private repositories; the release
+  workflow skips that step automatically when the repo is private. Checksums and signing still work.
+- SignPath Foundation requires a public repository; Azure Artifact Signing and your own OV certificate do not.
+- GitHub-hosted Windows runners bill at a higher rate than Linux on private repositories (free minutes are
+  limited), so the Windows jobs will count against your quota.
+- Check any secrets, personal paths or session links in docs and commit history before switching, since
+  the history stays with the repository.
