@@ -164,6 +164,16 @@ pre.explain{white-space:pre-wrap;font:13px/1.55 var(--sans);margin:0}
     <div class="row"><select id="mRec" aria-label="Recommended model"></select><button class="b p" id="bPull">Download &amp; use</button></div>
     <div class="row"><input type="text" id="gPath" placeholder="C:\models\model.gguf (served by llama-server)" aria-label="GGUF path"><button class="b" id="bGguf">Use GGUF file</button></div>
     <span class="cli">visionary ai local pull qwen3:1.7b &nbsp;·&nbsp; visionary ai local gguf &lt;file&gt;</span></div>
+  <h2>Model store</h2>
+  <div class="card"><p class="muted" style="margin-top:0">GGUF models run through llama.cpp's <code>llama-server</code>. Download from Hugging Face or bring your own file. Every file is checked: SHA-256 against the hub, and its real parameter count against the limit.</p>
+    <div class="tablewrap" id="gTable" style="margin:10px 0"></div>
+    <div class="row"><input type="text" id="hQ" placeholder="Search Hugging Face, e.g. qwen3 1.7b" aria-label="Search Hugging Face"><button class="b" id="bHFSearch">Search</button></div>
+    <div id="hRes"></div>
+    <div class="row"><input type="text" id="hRef" placeholder="owner/repo or owner/repo:Q4_K_M" aria-label="Hugging Face repository"><button class="b p" id="bHFGet">Download &amp; use</button><button class="b d" id="bHFCancel" hidden>Cancel</button></div>
+    <div id="hProg" class="muted"></div>
+    <div class="row"><input type="text" id="iGguf" placeholder="C:\models\my-model.gguf (copied into the store)" aria-label="Own GGUF file"><button class="b" id="bImpGguf">Import my model</button></div>
+    <div class="row"><input type="password" id="kHF" placeholder="Hugging Face read token (only for gated models)" autocomplete="off" aria-label="Hugging Face token"><button class="b" id="bHFTok">Save token</button></div>
+    <span class="cli">visionary ai local hf search &lt;text&gt; &nbsp;·&nbsp; visionary ai local hf get &lt;repo&gt; &nbsp;·&nbsp; visionary ai local import &lt;file&gt; &nbsp;·&nbsp; visionary ai local models</span></div>
   <h2>Cloud model</h2>
   <div class="card"><div id="aCloud"></div>
     <div class="row"><input type="password" id="kAnth" placeholder="Anthropic API key" autocomplete="off" aria-label="Anthropic API key"><button class="b p" id="bKey">Save key</button><button class="b d" id="bKeyClr">Remove</button></div>
@@ -381,12 +391,38 @@ async function aiTab() {
     a.ollama !== "running" && a.local.provider === "ollama" ? el("div", { class: "note" }, "Ollama is not answering at " + a.local.endpoint + ". Install it from ollama.com and start it, then download a model below.") : null);
   fill($("mTable"), table(["Installed model", "Parameters", "Size", ""], a.models.map(m => el("tr", {}, el("td", {}, el("b", {}, m.name), m.loaded ? [" ", el("span", { class: "tag ok" }, "loaded")] : null), el("td", {}, m.params || "?", m.params_b > a.local.max_params_b ? [" ", el("span", { class: "tag warn" }, "over limit")] : null), el("td", {}, m.size_mb + " MB"),
     el("td", {}, m.name === a.local.model ? el("span", { class: "tag ok" }, "in use") : el("button", { class: "b", disabled: m.params_b > a.local.max_params_b ? "" : false, on: { click: e => act(() => api("/api/ai", { action: "use", name: m.name }), "Using " + m.name, e.target) } }, "Use")))), "No local models installed yet."));
+  fill($("gTable"), table(["Stored model", "Parameters", "Size", "Source", ""], a.stored.map(m => el("tr", {}, el("td", {}, el("b", {}, m.name)), el("td", {}, m.params_b.toFixed(2) + "B"), el("td", {}, m.size_mb + " MB"), el("td", {}, m.source),
+    el("td", {}, m.path === a.local.model_path ? el("span", { class: "tag ok" }, "in use") : el("button", { class: "b", on: { click: e => act(() => api("/api/ai", { action: "use-stored", name: m.name }), "Using " + m.name, e.target) } }, "Use"), " ",
+      el("button", { class: "b d", on: { click: e => confirm("Delete " + m.name + "?") && act(() => api("/api/ai", { action: "remove-stored", name: m.name }), "Removed", e.target) } }, "Delete")))), "No GGUF models yet."));
+  dlState(a.download);
   if (!$("mRec").options.length) fill($("mRec"), a.recommended.map(m => el("option", { value: m.Model }, m.Model + " — " + m.Params + ", " + m.About)));
   fill($("aCloud"), el("div", {}, el("b", {}, a.cloud.model), " · ", el("span", { class: "tag " + (a.cloud_key_set ? "ok" : "warn") }, a.cloud_key_set ? "API key stored (encrypted)" : "no API key")));
   fill($("aVT"), el("div", {}, el("b", {}, "VirusTotal"), " · ", el("span", { class: "tag " + (a.vt_key_set ? "ok" : "") }, a.vt_key_set ? "key stored" : "not configured")));
 }
 $("aMode").onchange = e => act(() => api("/api/ai", { action: "mode", value: e.target.value }), "AI mode updated");
 $("aShare").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.cloud.share_snippets", value: String(e.target.checked) }), "Saved");
+let dlTimer = null;
+function dlState(d) {
+  $("bHFCancel").hidden = !d.running;
+  if (d.running) {
+    const pct = d.total ? Math.floor(d.done * 100 / d.total) : 0;
+    $("hProg").textContent = "Downloading " + d.ref + " — " + pct + "% (" + (d.done >> 20) + " / " + (d.total >> 20) + " MB)";
+    if (!dlTimer) dlTimer = setInterval(async () => { const a = await api("/api/ai"); dlState(a.download); }, 1000);
+  } else {
+    if (dlTimer) { clearInterval(dlTimer); dlTimer = null; aiTab(); }
+    $("hProg").textContent = d.error ? "Download failed: " + d.error : (d.result || "");
+  }
+}
+$("bHFSearch").onclick = async e => {
+  try { const r = await api("/api/ai", { action: "hf-search", value: $("hQ").value.trim() });
+    fill($("hRes"), table(["Repository", "Downloads", "Size", ""], r.map(m => el("tr", {}, el("td", {}, el("b", {}, m.id), m.gated ? [" ", el("span", { class: "tag warn" }, "gated")] : null), el("td", {}, m.downloads.toLocaleString()),
+      el("td", {}, m.params_b ? m.params_b.toFixed(1) + "B" : "?"), el("td", {}, el("button", { class: "b", on: { click: () => { $("hRef").value = m.id; } } }, "Pick")))), "No GGUF repositories found."));
+  } catch (err) { toast(err.message); }
+};
+$("bHFGet").onclick = e => act(async () => { await api("/api/ai", { action: "hf-get", name: $("hRef").value.trim() }); dlState((await api("/api/ai")).download); }, "Download started", e.target);
+$("bHFCancel").onclick = e => act(() => api("/api/ai", { action: "hf-cancel" }), "Cancelling", e.target);
+$("bImpGguf").onclick = e => act(() => api("/api/ai", { action: "import", path: $("iGguf").value.trim() }), r => "Imported (" + r.params_b.toFixed(2) + "B parameters)", e.target).then(() => aiTab());
+$("bHFTok").onclick = e => act(() => api("/api/ai", { action: "hf-token", key: $("kHF").value }), "Token saved", e.target).then(() => $("kHF").value = "");
 $("bPull").onclick = e => { toast("Downloading " + $("mRec").value + " — this can take a few minutes"); act(() => api("/api/ai", { action: "pull", name: $("mRec").value }), r => "Model ready (" + r.params_b.toFixed(2) + "B parameters)", e.target); };
 $("bGguf").onclick = e => act(() => api("/api/ai", { action: "gguf", path: $("gPath").value.trim() }), r => "Using GGUF model (" + r.params_b.toFixed(2) + "B parameters)", e.target);
 $("bKey").onclick = e => act(() => api("/api/ai", { action: "set-key", key: $("kAnth").value }), "API key stored", e.target).then(() => $("kAnth").value = "");

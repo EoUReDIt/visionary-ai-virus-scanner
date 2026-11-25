@@ -388,3 +388,87 @@ func (a *App) DefenderOfflineScan() error {
 	a.Log("system", "info", "Microsoft Defender Offline scan requested; Windows will restart", nil)
 	return nil
 }
+
+// ---- model store: Hugging Face downloads and bring-your-own GGUF ----
+
+// ModelDir is where downloaded and imported GGUF models live.
+func ModelDir() string { return filepath.Join(config.Dir(), "models") }
+
+func (a *App) StoredModels() ([]ai.StoredModel, error) { return ai.ListStore(ModelDir()) }
+
+// HFSearch finds GGUF repositories on Hugging Face.
+func (a *App) HFSearch(ctx context.Context, query string) ([]ai.HFModel, error) {
+	return ai.HFSearch(ctx, secure.Secret("huggingface"), query, 15)
+}
+
+// HFFiles lists the GGUF files (and quantisations) of a repository.
+func (a *App) HFFiles(ctx context.Context, repo string) ([]ai.HFFile, error) {
+	return ai.HFFiles(ctx, secure.Secret("huggingface"), repo)
+}
+
+// HFGet downloads a model into the store and, unless use is false, selects it.
+// ref is owner/repo, owner/repo:QUANT, owner/repo/file.gguf or a huggingface.co link.
+func (a *App) HFGet(ctx context.Context, ref, quant string, use bool, progress func(done, total int64)) (ai.StoredModel, error) {
+	r, err := ai.ParseHFRef(ref)
+	if err != nil {
+		return ai.StoredModel{}, err
+	}
+	if quant != "" {
+		r.File = quant
+	}
+	m, err := ai.HFDownload(ctx, ai.HFDownloadOptions{
+		Repo: r.Repo, File: r.File, Token: secure.Secret("huggingface"), Dir: ModelDir(),
+		MaxParamsB: a.Config().AI.Local.MaxParamsB, Progress: progress})
+	if err != nil {
+		return m, err
+	}
+	if use {
+		_, err = a.UseGGUF(m.Path, "")
+	}
+	return m, err
+}
+
+// ImportModel brings the user's own GGUF into the store.
+func (a *App) ImportModel(path string, use bool) (ai.StoredModel, error) {
+	m, err := ai.ImportGGUF(path, ModelDir(), a.Config().AI.Local.MaxParamsB)
+	if err != nil {
+		return m, err
+	}
+	if use {
+		_, err = a.UseGGUF(m.Path, "")
+	}
+	return m, err
+}
+
+// UseStoredModel selects a model from the store.
+func (a *App) UseStoredModel(name string) (ai.StoredModel, error) {
+	m, err := ai.FindStored(ModelDir(), name)
+	if err != nil {
+		return m, err
+	}
+	_, err = a.UseGGUF(m.Path, "")
+	return m, err
+}
+
+// RemoveStoredModel deletes a stored model; if it is the one in use the local
+// provider is cleared.
+func (a *App) RemoveStoredModel(name string) error {
+	m, err := ai.FindStored(ModelDir(), name)
+	if err != nil {
+		return err
+	}
+	if err := ai.RemoveStored(ModelDir(), name); err != nil {
+		return err
+	}
+	return a.update(func(c *config.Config) error {
+		if c.AI.Local.ModelPath == m.Path {
+			c.AI.Local.ModelPath, c.AI.Local.Model = "", ""
+			if c.AI.Mode == "local" {
+				c.AI.Mode = "off"
+			} else if c.AI.Mode == "hybrid" {
+				c.AI.Mode = "cloud"
+			}
+		}
+		return nil
+	})
+}
