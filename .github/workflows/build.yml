@@ -1,0 +1,55 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: GOOS=windows go vet ./...
+      - run: go test ./...
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Version
+        id: v
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"; else echo "version=0.1.0-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"; fi
+      - name: Build binaries and installer
+        shell: pwsh
+        run: .\scripts\build.ps1 -Version "${{ steps.v.outputs.version }}"
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome"
+          .\dist\visionary.exe version
+          .\dist\visionary.exe status
+          .\dist\visionary.exe scan .\scripts .\dist --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "scan of the build output reported detections" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: visionary-windows-${{ steps.v.outputs.version }}
+          path: |
+            dist/visionary.exe
+            dist/VisionaryUI.exe
+            dist/Visionary-Setup-*.exe
