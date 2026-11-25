@@ -1,0 +1,8 @@
+# Keep line endings identical on every OS: the built-in rules are compressed at
+# `go generate` time and a test compares the result byte for byte.
+* text=auto
+*.yar text eol=lf
+*.sh text eol=lf
+*.go text eol=lf
+*.gz binary
+*.exe binary
