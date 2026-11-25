@@ -31,6 +31,22 @@ and/or a cloud model through your own API key.
 Run `visionary help` for the full command list. Exit codes: 0 clean, 1 malicious, 2 suspicious, 3 error.
 Add `--json` where offered for scripting.
 
+## Local models: Ollama, Hugging Face or your own GGUF
+
+```
+visionary ai local pull qwen3:1.7b                      # Ollama registry
+visionary ai local hf search qwen3 1.7b                 # Hugging Face (GGUF repos, most downloaded first)
+visionary ai local hf files unsloth/Qwen3-1.7B-GGUF     # list quantisations
+visionary ai local hf get unsloth/Qwen3-1.7B-GGUF --quant Q4_K_M
+visionary ai local import C:\models\mine.gguf           # bring your own file (copied into the store)
+visionary ai local models | remove <name> | use ...     # manage the store
+visionary ai local hf set-token                         # only for gated models
+```
+Downloads resume, are size-guarded, verified against the hub's SHA-256, checked as real GGUF, and
+rejected (deleted) if their tensor count exceeds `ai.local.max_params_b` (default 3B). Only
+huggingface.co links and redirects are followed; the token is never sent to CDN hosts. GGUF models run
+through `llama-server` (pass `--server <path>` once). The dashboard AI tab has the same features.
+
 ## How detection works
 
 allowlist -> clean cache -> hash definitions -> YARA-subset rules -> static heuristics
