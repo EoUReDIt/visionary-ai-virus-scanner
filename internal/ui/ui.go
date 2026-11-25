@@ -390,7 +390,7 @@ func (s *server) ai(r *http.Request) (any, error) {
 		}
 		return map[string]any{"mode": cfg.AI.Mode, "local": cfg.AI.Local, "cloud": cfg.AI.Cloud,
 			"cloud_key_set": secure.Secret("anthropic") != "", "vt_key_set": secure.Secret("virustotal") != "",
-			"recommended": ai.Recommended, "models": models, "ollama": runtime}, nil
+			"recommended": ai.RecommendedFor(cfg.AI.Local.MaxParamsB), "models": models, "ollama": runtime}, nil
 	}
 	q, err := body(r)
 	if err != nil {

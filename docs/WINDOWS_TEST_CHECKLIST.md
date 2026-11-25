@@ -108,6 +108,15 @@ Legend: [ ] not run, PASS / FAIL / N/A.
 - [ ] 100k-file folder scan: memory stays bounded, scan cancels on Ctrl+C.
 - [ ] Antivirus self-detection: Defender does not flag `visionary.exe` (note SmartScreen/Defender verdict).
 
+## 14. Lite edition
+- [ ] `Visionary-Lite-Setup` installs `visionary.exe` (lite): `visionary version` says "lite edition", no dashboard shortcut, `visionary ui` explains it is not included.
+- [ ] Idle `visionary guard`: working set well under 60 MB and ~0% CPU (CI records it; confirm on real hardware, incl. a low-end laptop).
+- [ ] With Ollama: `ai mode local`, `ai test`; Task Manager shows no GPU use for the model (num_gpu=0) and the model unloads after ~2 minutes idle.
+- [ ] With llama-server: process command line contains `-ngl 0 -t N`; no GPU memory allocated.
+- [ ] `ai recommend` lists only models at or under 2B; a 2.6B model is refused.
+- [ ] `visionary profile lite` on the full edition applies the same settings; `profile balanced` leaves AI settings as they were.
+- [ ] Game mode still defers work with the lite settings; a full quick scan completes on a 2-core / 4 GB machine without freezing the desktop.
+
 ## Reporting
 For each FAIL record: Windows build, elevation, exact command, `visionary events --json` excerpt, and
 `%ProgramData%\VisionaryAV\*.log` if present. File issues with the label `windows-validation`.

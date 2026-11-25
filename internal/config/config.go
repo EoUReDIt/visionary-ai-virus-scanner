@@ -6,6 +6,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,6 +35,8 @@ type Realtime struct {
 	WatchPaths     []string `json:"watch_paths"` // empty = platform defaults
 	AutoQuarantine bool     `json:"auto_quarantine"`
 	Excludes       []string `json:"excludes"`
+	Workers        int      `json:"workers"`   // scan workers for the guard; 0 = 2
+	SettleMS       int      `json:"settle_ms"` // wait for a file to stop changing; 0 = 700
 }
 
 type Scan struct {
@@ -52,6 +55,12 @@ type LocalAI struct {
 	MaxParamsB float64 `json:"max_params_b"` // parameter ceiling, in billions
 	ServerPath string  `json:"server_path,omitempty"`
 	ModelPath  string  `json:"model_path,omitempty"` // GGUF for llama-server
+	// CPUOnly keeps the model off the GPU (Ollama num_gpu=0, llama.cpp -ngl 0)
+	// and unloads it after KeepAlive of idleness, so a game or an old laptop
+	// never loses VRAM or RAM to the scanner.
+	CPUOnly   bool   `json:"cpu_only"`
+	Threads   int    `json:"threads"`              // 0 = half the cores
+	KeepAlive string `json:"keep_alive,omitempty"` // Ollama keep_alive, e.g. "2m"
 }
 
 type CloudAI struct {
@@ -88,6 +97,7 @@ type Behavior struct {
 	LearningUntil time.Time `json:"learning_until,omitempty"`
 	LearnDays     int       `json:"learn_days"`
 	Threshold     int       `json:"threshold"` // anomaly score that raises an alert
+	PollMS        int       `json:"poll_ms"`   // process poll interval; 0 = 1500
 }
 
 type Security struct {
@@ -130,7 +140,36 @@ type UISettings struct {
 	Port int `json:"port"`
 }
 
+// ApplyLite sets the low-footprint preset: one scan worker, slower polling,
+// smaller files and archives, a tighter AI budget and CPU-only local AI with a
+// 2B ceiling. The Lite edition starts from it; any edition can switch to it
+// with `visionary profile lite`.
+func ApplyLite(c *Config) {
+	c.Profile = "lite"
+	c.Scan.Workers = 1
+	c.Scan.MaxFileSizeMB = 32
+	c.Scan.AIBudget = 5
+	c.Realtime.Workers = 1
+	c.Realtime.SettleMS = 2000
+	c.Behavior.PollMS = 3000
+	c.GameMode.Auto = true
+	c.AI.Local.CPUOnly = true
+	c.AI.Local.KeepAlive = "2m"
+	c.AI.Local.MaxParamsB = 2.0
+	if c.AI.Local.Model == "" || c.AI.Local.Model == "qwen3:1.7b" {
+		c.AI.Local.Model = "gemma3:1b"
+	}
+}
+
 func Default() *Config {
+	c := defaults()
+	if edition.Lite {
+		ApplyLite(c)
+	}
+	return c
+}
+
+func defaults() *Config {
 	return &Config{
 		Profile:    "balanced",
 		Protection: Protection{Enabled: true},
