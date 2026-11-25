@@ -22,10 +22,10 @@ import (
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/app"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/defs"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/plat"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/secure"
-	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/ui"
 )
 
 const usage = `Visionary — antivirus with local and cloud AI
@@ -40,7 +40,7 @@ const usage = `Visionary — antivirus with local and cloud AI
   visionary protection status|enable
   visionary protection disable --for 15m|1h|restart|permanent
   visionary gamemode on|off|auto
-  visionary profile balanced|gamer|dev
+  visionary profile balanced|gamer|dev|lite
 
   visionary defs import <file> [--name N] [--kind hashes|yara|certs|cvd]
   visionary defs list|stats|remove <name>
@@ -154,7 +154,7 @@ func main() {
 	// VisionaryUI.exe is this program linked without a console window: the
 	// Start-menu shortcut. With no arguments it opens the dashboard.
 	if exe, _ := os.Executable(); len(argv) == 0 && strings.HasPrefix(strings.ToLower(filepath.Base(exe)), "visionaryui") {
-		if err := ui.Serve(interruptible(), a, 0, true, true); err != nil {
+		if err := serveUI(interruptible(), a, 0, true, true); err != nil {
 			a.Log("system", "warn", "Dashboard could not start: "+err.Error(), nil)
 		}
 		return
@@ -169,7 +169,7 @@ func main() {
 
 	switch cmd {
 	case "version":
-		fmt.Println("visionary", config.Version)
+		fmt.Println("visionary", config.Version, "("+edition.Name+" edition)")
 	case "status":
 		parse(fs, rest)
 		cmdStatus(a)
@@ -189,7 +189,7 @@ func main() {
 		noOpen := fs.Bool("no-open", false, "do not open a browser window")
 		noGuard := fs.Bool("no-guard", false, "do not run real-time protection inside the dashboard process")
 		parse(fs, rest)
-		check(ui.Serve(interruptible(), a, *port, !*noOpen, !*noGuard))
+		check(serveUI(interruptible(), a, *port, !*noOpen, !*noGuard))
 	case "protection":
 		cmdProtection(a, fs, rest)
 	case "gamemode":
@@ -278,7 +278,7 @@ func cmdStatus(a *app.App) {
 		return
 	}
 	row := func(k, v string) { fmt.Printf("  %-22s %s\n", k, v) }
-	fmt.Println(bold("Visionary " + s.Version))
+	fmt.Println(bold("Visionary " + s.Version + " (" + s.Edition + " edition)"))
 	prot := onOff(s.Protection) + dim("  ("+s.ProtReason+")")
 	row("Real-time protection", prot)
 	guard := green("running")
@@ -604,8 +604,8 @@ func cmdAI(a *app.App, fs *flag.FlagSet, rest []string) {
 		check(a.SetAIMode(need(pos, 1, "off, local, cloud or hybrid")))
 		ok("AI mode: %s", pos[1])
 	case "recommend":
-		fmt.Println("Local models under the 3B-parameter limit (pull with: visionary ai local pull <model>)")
-		for _, m := range ai.Recommended {
+		fmt.Printf("Local models under the %.1fB-parameter limit (pull with: visionary ai local pull <model>)\n", cfg.AI.Local.MaxParamsB)
+		for _, m := range ai.RecommendedFor(cfg.AI.Local.MaxParamsB) {
 			fmt.Printf("  %-22s %-6s %s\n", bold(m.Model), m.Params, m.About)
 		}
 	case "test":
@@ -947,7 +947,8 @@ func cmdSettings(a *app.App, fs *flag.FlagSet, rest []string) {
 				"scan.use_cache", "scan.ai_budget", "behavior.enabled", "behavior.threshold",
 				"security.require_password_to_disable", "windows.defender_second_opinion", "reputation.virustotal",
 				"ai.cloud.share_snippets", "ai.cloud.model", "ai.cloud.effort", "ai.local.endpoint", "ai.local.provider",
-				"ai.local.server_path", "ai.local.max_params_b", "ui.port"}
+				"ai.local.server_path", "ai.local.max_params_b", "ai.local.cpu_only", "ai.local.threads",
+				"ai.local.keep_alive", "realtime.workers", "realtime.settle_ms", "behavior.poll_ms", "ui.port"}
 			sort.Strings(keys)
 			fmt.Println(dim("\nsettable with `visionary settings set <key> <value>`:\n  " + strings.Join(keys, "\n  ")))
 		}

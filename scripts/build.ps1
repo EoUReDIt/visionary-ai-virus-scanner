@@ -16,16 +16,24 @@ go build -trimpath -ldflags "-s -w -X $pkg.Version=$Version" -o dist\visionary.e
 Check "build visionary.exe"
 go build -trimpath -ldflags "-s -w -H=windowsgui -X $pkg.Version=$Version" -o dist\VisionaryUI.exe .\cmd\visionary
 Check "build VisionaryUI.exe"
-# Sign before packaging so the installer carries signed binaries (no-op without a certificate).
-& "$PSScriptRoot\sign.ps1" dist\visionary.exe dist\VisionaryUI.exe
+go vet -tags lite ./...
+Check "go vet (lite)"
+go test -tags lite ./internal/config ./internal/ai ./internal/app
+Check "go test (lite)"
+go build -trimpath -tags lite -ldflags "-s -w -X $pkg.Version=$Version" -o dist\visionary-lite.exe .\cmd\visionary
+Check "build visionary-lite.exe"
+# Sign before packaging so the installers carry signed binaries (no-op without a certificate).
+& "$PSScriptRoot\sign.ps1" dist\visionary.exe dist\VisionaryUI.exe dist\visionary-lite.exe
 $nsis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
 if (-not $nsis) { $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe" }
 if (Test-Path $nsis) {
   & $nsis /V2 "/DVERSION=$Version" "/DBINDIR=..\dist" "/DOUTFILE=..\dist\Visionary-Setup-$Version.exe" installer\visionary.nsi
   Check "makensis"
+  & $nsis /V2 /DLITE "/DVERSION=$Version" "/DBINDIR=..\dist" "/DOUTFILE=..\dist\Visionary-Lite-Setup-$Version.exe" installer\visionary.nsi
+  Check "makensis (lite)"
 } else {
   Write-Warning "NSIS not found: install it (winget install NSIS.NSIS) to build the installer."
 }
-$setups = @(Get-ChildItem dist -Filter "Visionary-Setup-*.exe" | ForEach-Object FullName)
+$setups = @(Get-ChildItem dist -Filter "Visionary*Setup-*.exe" | ForEach-Object FullName)
 if ($setups.Count -gt 0) { & "$PSScriptRoot\sign.ps1" @setups }
 Get-ChildItem dist

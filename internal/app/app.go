@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
 	"os"
 	"path/filepath"
 	"strings"
@@ -293,6 +294,7 @@ func (a *App) Enable() error {
 
 type Status struct {
 	Version    string           `json:"version"`
+	Edition    string           `json:"edition"`
 	Protection bool             `json:"protection"`
 	ProtReason string           `json:"protection_reason"`
 	GuardAlive bool             `json:"guard_running"`
@@ -332,7 +334,7 @@ func (a *App) Status(withWindows bool) *Status {
 	cfg := a.Config()
 	on, why := a.ProtectionActive()
 	s := &Status{
-		Version: config.Version, Protection: on, ProtReason: why, GuardAlive: GuardAlive(),
+		Version: config.Version, Edition: edition.Name, Protection: on, ProtReason: why, GuardAlive: GuardAlive(),
 		GameMode: a.GameMode(), Profile: cfg.Profile, Defs: a.db.Stats(), Channels: len(cfg.Channels),
 		AIMode: cfg.AI.Mode, CloudKey: secure.Secret("anthropic") != "", VTKey: secure.Secret("virustotal") != "",
 		Quarantine: len(engine.QuarantineList()), Learning: a.Learning(),
@@ -512,12 +514,14 @@ func (a *App) ResetSettings(password string, all bool) error {
 }
 
 func (a *App) SetProfile(p string) error {
-	if p != "balanced" && p != "gamer" && p != "dev" {
-		return errors.New("profile must be balanced, gamer or dev")
+	if p != "balanced" && p != "gamer" && p != "dev" && p != "lite" {
+		return errors.New("profile must be balanced, gamer, dev or lite")
 	}
 	return a.update(func(c *config.Config) error {
 		c.Profile = p
 		switch p {
+		case "lite":
+			config.ApplyLite(c)
 		case "gamer":
 			c.GameMode.Auto = true
 		case "dev":
@@ -596,6 +600,18 @@ func (a *App) Set(key, value string) error {
 				return errors.New("ai.local.max_params_b must be between 0 and 3 (billions of parameters)")
 			}
 			c.AI.Local.MaxParamsB = f
+		case "ai.local.cpu_only":
+			return needBool(&c.AI.Local.CPUOnly)
+		case "ai.local.threads":
+			return needInt(&c.AI.Local.Threads, 0, 256)
+		case "ai.local.keep_alive":
+			c.AI.Local.KeepAlive = value
+		case "realtime.workers":
+			return needInt(&c.Realtime.Workers, 0, 16)
+		case "realtime.settle_ms":
+			return needInt(&c.Realtime.SettleMS, 0, 60000)
+		case "behavior.poll_ms":
+			return needInt(&c.Behavior.PollMS, 0, 60000)
 		case "ui.port":
 			return needInt(&c.UI.Port, 1024, 65535)
 		default:

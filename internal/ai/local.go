@@ -12,12 +12,25 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
 )
+
+// RecommendedFor returns the recommended models that fit maxB billion
+// parameters (the Lite edition lists only the small ones).
+func RecommendedFor(maxB float64) []struct{ Model, Params, About string } {
+	var out []struct{ Model, Params, About string }
+	for _, m := range Recommended {
+		if ParseParamSize(m.Params) <= maxB {
+			out = append(out, m)
+		}
+	}
+	return out
+}
 
 // Recommended models stay under the 3B ceiling and run on a laptop CPU or a
 // few GB of VRAM alongside a game.
@@ -68,7 +81,19 @@ func NewLocal(c config.LocalAI) Provider {
 	if ep == "" {
 		ep = "http://127.0.0.1:11434"
 	}
-	return &Ollama{Endpoint: ep, ModelName: c.Model}
+	return &Ollama{Endpoint: ep, ModelName: c.Model, Cfg: c}
+}
+
+// cpuThreads is the thread budget for CPU-only inference: half the cores, at
+// least one, so the machine stays usable while a file is being triaged.
+func cpuThreads(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	if n := runtime.NumCPU() / 2; n > 1 {
+		return n
+	}
+	return 1
 }
 
 // ---- Ollama ----
@@ -76,6 +101,26 @@ func NewLocal(c config.LocalAI) Provider {
 type Ollama struct {
 	Endpoint  string
 	ModelName string
+	Cfg       config.LocalAI
+}
+
+// options are the per-request model options; CPU-only mode pins the model off
+// the GPU and bounds the context to keep memory small.
+func (o *Ollama) options() map[string]any {
+	opts := map[string]any{"temperature": 0, "num_ctx": 8192}
+	if o.Cfg.CPUOnly {
+		opts["num_gpu"] = 0
+		opts["num_thread"] = cpuThreads(o.Cfg.Threads)
+		opts["num_ctx"] = 4096
+	}
+	return opts
+}
+
+func (o *Ollama) keepAlive() string {
+	if o.Cfg.KeepAlive != "" {
+		return o.Cfg.KeepAlive
+	}
+	return "15m"
 }
 
 func (o *Ollama) Name() string  { return "ollama" }
@@ -90,8 +135,8 @@ func (o *Ollama) Complete(ctx context.Context, system, user string, wantJSON boo
 			{"role": "system", "content": system},
 			{"role": "user", "content": user},
 		},
-		"options":    map[string]any{"temperature": 0, "num_ctx": 8192},
-		"keep_alive": "15m",
+		"options":    o.options(),
+		"keep_alive": o.keepAlive(),
 	}
 	if wantJSON {
 		body["format"] = "json"
@@ -247,10 +292,17 @@ func (o *Ollama) Pull(ctx context.Context, model string, progress func(string)) 
 // Load keeps a model in memory (or unloads it) so the first triage is fast.
 func (o *Ollama) Load(ctx context.Context, model string, load bool) error {
 	keep := any("30m")
+	if o.Cfg.CPUOnly {
+		keep = o.keepAlive()
+	}
 	if !load {
 		keep = 0
 	}
-	return postJSON(ctx, o.Endpoint+"/api/generate", map[string]any{"model": model, "keep_alive": keep}, nil)
+	body := map[string]any{"model": model, "keep_alive": keep}
+	if o.Cfg.CPUOnly {
+		body["options"] = map[string]any{"num_gpu": 0, "num_thread": cpuThreads(o.Cfg.Threads), "num_ctx": 4096}
+	}
+	return postJSON(ctx, o.Endpoint+"/api/generate", body, nil)
 }
 
 // ---- llama.cpp server (GGUF files) ----
@@ -288,7 +340,7 @@ func (l *LlamaServer) Ensure(ctx context.Context) error {
 		return err
 	}
 	port := l.Endpoint[strings.LastIndexByte(l.Endpoint, ':')+1:]
-	l.cmd = exec.Command(l.Cfg.ServerPath, "-m", l.Cfg.ModelPath, "--host", "127.0.0.1", "--port", port, "-c", "8192")
+	l.cmd = exec.Command(l.Cfg.ServerPath, l.args(port)...)
 	if err := l.cmd.Start(); err != nil {
 		return fmt.Errorf("starting llama-server: %w", err)
 	}
@@ -303,6 +355,17 @@ func (l *LlamaServer) Ensure(ctx context.Context) error {
 		}
 	}
 	return errors.New("llama-server did not become ready within two minutes")
+}
+
+// args builds the llama-server command line. CPU-only mode offloads no layers
+// to the GPU, bounds threads and context, and keeps the model out of swap.
+func (l *LlamaServer) args(port string) []string {
+	a := []string{"-m", l.Cfg.ModelPath, "--host", "127.0.0.1", "--port", port, "-c", "8192"}
+	if l.Cfg.CPUOnly {
+		a = []string{"-m", l.Cfg.ModelPath, "--host", "127.0.0.1", "--port", port, "-c", "4096",
+			"-ngl", "0", "-t", strconv.Itoa(cpuThreads(l.Cfg.Threads))}
+	}
+	return a
 }
 
 func (l *LlamaServer) Stop() {

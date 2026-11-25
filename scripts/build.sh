@@ -9,10 +9,17 @@ mkdir -p dist
 go generate ./internal/defs
 go vet ./...
 go test ./...
+go vet -tags lite ./...
+go test -tags lite ./internal/config ./internal/ai ./internal/app
 export GOOS=windows GOARCH=amd64 CGO_ENABLED=0
 go build -trimpath -ldflags "-s -w -X $PKG.Version=$VERSION" -o dist/visionary.exe ./cmd/visionary
 # Same program linked for the GUI subsystem: no console window for the dashboard.
 go build -trimpath -ldflags "-s -w -H=windowsgui -X $PKG.Version=$VERSION" -o dist/VisionaryUI.exe ./cmd/visionary
+# Lite edition: no dashboard, CPU-only local AI, low-footprint defaults.
+go build -trimpath -tags lite -ldflags "-s -w -X $PKG.Version=$VERSION" -o dist/visionary-lite.exe ./cmd/visionary
+if command -v makensis >/dev/null 2>&1; then
+  makensis -V2 -DLITE -DVERSION="$VERSION" -DBINDIR=../dist -DOUTFILE="../dist/Visionary-Lite-Setup-$VERSION.exe" installer/visionary.nsi
+fi
 if command -v makensis >/dev/null 2>&1; then
   makensis -V2 -DVERSION="$VERSION" -DBINDIR=../dist -DOUTFILE="../dist/Visionary-Setup-$VERSION.exe" installer/visionary.nsi
 fi

@@ -1,6 +1,9 @@
 ; Visionary installer (NSIS 3, 64-bit Windows 10/11).
 ; Build:  makensis -DVERSION=1.0.0 -DBINDIR=..\dist installer\visionary.nsi
 ; BINDIR must contain visionary.exe (console) and VisionaryUI.exe (windowed).
+; Lite edition:  makensis -DLITE -DVERSION=1.0.0 -DBINDIR=..\dist installer\visionary.nsi
+;   BINDIR then needs visionary-lite.exe only (installed as visionary.exe; no dashboard).
+; The two editions share one install location and uninstaller: installing one replaces the other.
 
 Unicode true
 !include "MUI2.nsh"
@@ -17,7 +20,11 @@ Unicode true
   !define OUTFILE "..\dist\Visionary-Setup-${VERSION}.exe"
 !endif
 
-!define APP "Visionary"
+!ifdef LITE
+  !define APP "Visionary Lite"
+!else
+  !define APP "Visionary"
+!endif
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\VisionaryAV"
 
 Name "${APP} ${VERSION}"
@@ -31,8 +38,10 @@ ShowUnInstDetails show
 
 !define MUI_ABORTWARNING
 !define MUI_COMPONENTSPAGE_SMALLDESC
-!define MUI_FINISHPAGE_RUN "$INSTDIR\VisionaryUI.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Open the Visionary dashboard"
+!ifndef LITE
+  !define MUI_FINISHPAGE_RUN "$INSTDIR\VisionaryUI.exe"
+  !define MUI_FINISHPAGE_RUN_TEXT "Open the Visionary dashboard"
+!endif
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_COMPONENTS
@@ -65,8 +74,12 @@ Section "Visionary (required)" SecCore
   nsExec::ExecToLog 'taskkill /F /IM VisionaryUI.exe'
 
   SetOutPath "$INSTDIR"
+!ifdef LITE
+  File /oname=visionary.exe "${BINDIR}\visionary-lite.exe"
+!else
   File "${BINDIR}\visionary.exe"
   File "${BINDIR}\VisionaryUI.exe"
+!endif
   File /oname=README.md "..\README.md"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -74,7 +87,11 @@ Section "Visionary (required)" SecCore
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${APP}"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "Visionary"
+!ifdef LITE
+  WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\visionary.exe"
+!else
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\VisionaryUI.exe"
+!endif
   WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegDWORD HKLM "${UNINST_KEY}" "NoModify" 1
@@ -84,7 +101,9 @@ Section "Visionary (required)" SecCore
   WriteRegDWORD HKLM "${UNINST_KEY}" "EstimatedSize" "$0"
 
   CreateDirectory "$SMPROGRAMS\${APP}"
+!ifndef LITE
   CreateShortcut "$SMPROGRAMS\${APP}\${APP}.lnk" "$INSTDIR\VisionaryUI.exe"
+!endif
   CreateShortcut "$SMPROGRAMS\${APP}\${APP} Quick Scan.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\visionary.exe" scan quick"' "$INSTDIR\visionary.exe"
   CreateShortcut "$SMPROGRAMS\${APP}\Uninstall ${APP}.lnk" "$INSTDIR\uninstall.exe"
 SectionEnd
@@ -108,16 +127,24 @@ Section "Add the visionary command to PATH" SecPath
   nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -Command "$$p=[Environment]::GetEnvironmentVariable('Path','Machine'); if (($$p -split ';') -notcontains '$INSTDIR') { [Environment]::SetEnvironmentVariable('Path', $$p.TrimEnd(';') + ';$INSTDIR', 'Machine') }"`
 SectionEnd
 
+!ifndef LITE
 Section /o "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${APP}.lnk" "$INSTDIR\VisionaryUI.exe"
 SectionEnd
+!endif
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+!ifdef LITE
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "The scanner and the command-line tool (no dashboard, CPU-only local AI)."
+!else
   !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "The scanner, the command-line tool and the dashboard."
+!endif
   !insertmacro MUI_DESCRIPTION_TEXT ${SecService} "A Windows service that keeps real-time protection running from startup."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDefender} "Lets Visionary and Microsoft Defender run side by side without scanning each other's data."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPath} "Use 'visionary' from any terminal."
+!ifndef LITE
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A shortcut to the dashboard on the desktop."
+!endif
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"

@@ -21,6 +21,12 @@ jobs:
       - run: go vet ./...
       - run: GOOS=windows go vet ./...
       - run: go test ./...
+      - run: go vet -tags lite ./... && GOOS=windows go vet -tags lite ./...
+      - run: go test -tags lite ./internal/config ./internal/ai ./internal/app
+      - name: Lite idle budget (guard memory and CPU)
+        run: |
+          go build -tags lite -o visionary-lite ./cmd/visionary
+          sh scripts/idle-budget.sh ./visionary-lite 40 3
 
   windows:
     needs: test
@@ -51,6 +57,25 @@ jobs:
           .\dist\visionary.exe status
           .\dist\visionary.exe scan .\scripts .\dist --json | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "scan of the build output reported detections" }
+      - name: Smoke test (Lite)
+        shell: pwsh
+        run: |
+          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-lite"
+          .\dist\visionary-lite.exe version
+          .\dist\visionary-lite.exe status
+          .\dist\visionary-lite.exe scan .\scripts --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "lite scan reported detections" }
+      - name: Lite idle budget (Windows working set)
+        shell: pwsh
+        run: |
+          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-idle"
+          $p = Start-Process .\dist\visionary-lite.exe -ArgumentList "guard" -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 15
+          $p.Refresh()
+          $mb = [math]::Round($p.WorkingSet64 / 1MB, 1)
+          Write-Host "lite guard idle working set: $mb MB, cpu seconds: $($p.TotalProcessorTime.TotalSeconds)"
+          Stop-Process $p -Force
+          if ($mb -gt 100) { throw "idle working set $mb MB exceeds the 100 MB budget" }
       - name: Signing pipeline self-test (throwaway certificate)
         shell: pwsh
         run: |
@@ -70,4 +95,6 @@ jobs:
           path: |
             dist/visionary.exe
             dist/VisionaryUI.exe
+            dist/visionary-lite.exe
             dist/Visionary-Setup-*.exe
+            dist/Visionary-Lite-Setup-*.exe

@@ -31,6 +31,13 @@ and/or a cloud model through your own API key.
 Run `visionary help` for the full command list. Exit codes: 0 clean, 1 malicious, 2 suspicious, 3 error.
 Add `--json` where offered for scripting.
 
+## Lite edition (CPU-only, no dashboard)
+
+`dist/visionary-lite.exe` / `Visionary-Lite-Setup-*.exe` (built with `-tags lite`): same engine and CLI,
+no dashboard, one scan worker, slower polling, and local AI pinned to the CPU with an idle unload and a
+2B ceiling. On the full edition: `visionary profile lite`, or `visionary settings set ai.local.cpu_only true`.
+See [docs/LITE.md](docs/LITE.md).
+
 ## Local models: Ollama, Hugging Face or your own GGUF
 
 ```

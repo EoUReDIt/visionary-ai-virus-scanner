@@ -16,9 +16,17 @@ import (
 )
 
 const (
-	settleDelay = 700 * time.Millisecond // wait for a file to stop changing
-	scanWorkers = 2
+	defaultSettle  = 700 * time.Millisecond // wait for a file to stop changing
+	defaultWorkers = 2
+	defaultPoll    = 1500 * time.Millisecond // process monitor interval
 )
+
+func msOr(ms int, def time.Duration) time.Duration {
+	if ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return def
+}
 
 // RunGuard is real-time protection. It runs until ctx is cancelled and is
 // the same loop whether started from a terminal (`visionary guard`), by the
@@ -63,7 +71,11 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 
 	jobs := make(chan string, 512)
 	var wg sync.WaitGroup
-	for i := 0; i < scanWorkers; i++ {
+	workers := a.Config().Realtime.Workers
+	if workers <= 0 {
+		workers = defaultWorkers
+	}
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -157,9 +169,10 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 				continue
 			}
 			// Hand settled files to the scan workers.
+			settle := msOr(a.Config().Realtime.SettleMS, defaultSettle)
 			pendMu.Lock()
 			for p, t := range pending {
-				if now.Sub(t) >= settleDelay {
+				if now.Sub(t) >= settle {
 					select {
 					case jobs <- p:
 						delete(pending, p)
@@ -170,7 +183,7 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 			pendMu.Unlock()
 
 			cfg := a.Config()
-			if cfg.Behavior.Enabled && now.Sub(lastProc) >= 1500*time.Millisecond {
+			if cfg.Behavior.Enabled && now.Sub(lastProc) >= msOr(cfg.Behavior.PollMS, defaultPoll) {
 				lastProc = now
 				learning := a.Learning()
 				anomalies, started := mon.Poll(learning, cfg.Behavior.Threshold)
