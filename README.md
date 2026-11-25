@@ -38,6 +38,21 @@ no dashboard, one scan worker, slower polling, and local AI pinned to the CPU wi
 2B ceiling. On the full edition: `visionary profile lite`, or `visionary settings set ai.local.cpu_only true`.
 See [docs/LITE.md](docs/LITE.md).
 
+## Install
+
+**Easiest:** open this repo's **Releases** page, pick the latest release and download
+`Visionary-Setup-x.y.z.exe` (or `Visionary-Lite-Setup-x.y.z.exe` for the CPU-only edition), then run it.
+Releases are permanent and not zipped. While the repo is private you need to be signed in to GitHub with access.
+
+**Latest test build:** every push also builds the installers: **Actions** -> **build** -> latest green run -> **Artifacts**.
+
+**Publishing a release** (maintainers): push a version tag (`git tag v0.2.0 && git push origin v0.2.0`), or use
+**Actions** -> **Release** -> **Run workflow** and type `v0.2.0`. The workflow tests, builds and publishes the installers.
+Running it again for the same tag replaces that release's installers.
+
+The installers are not code-signed, so Windows may show a SmartScreen warning: **More info -> Run anyway**.
+Signing can be added later without changing this flow (see [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md)).
+
 ## Local models: Ollama, Hugging Face or your own GGUF
 
 ```
@@ -108,5 +123,5 @@ On Windows: `scripts/build.ps1`. CI: `.github/workflows/build.yml`.
 - Pre-boot = SYSTEM boot-time task plus Defender Offline scan, not a custom boot environment.
 - ClamAV body/logical signatures (.ndb/.ldb) and YARA modules/loops are unsupported (reported, skipped).
 - Password reset checks the account password (not a Windows Hello PIN).
-- Executables are unsigned; SmartScreen will warn.
+- Executables are unsigned, so Windows may show a SmartScreen warning the first time (More info -> Run anyway).
 - Small AI models are advisory; they can be wrong.

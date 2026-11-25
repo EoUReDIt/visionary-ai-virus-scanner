@@ -1,51 +1,34 @@
-name: release
+name: Release
 
-# Manual only: Actions -> release -> Run workflow, choose the branch to release
-# from and a version. The workflow builds, signs (when CODESIGN_* secrets exist),
-# and creates the GitHub release and its v<version> tag on that commit.
-# The workflow file must be on the default branch for the Run workflow button to appear.
+# Publishes the Windows installers to a GitHub Release (a permanent download page;
+# open to anyone if the repo is public, to people with access if it's private).
+# Runs when you push a version tag like v0.2.0, or from the Actions tab with "Run workflow".
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version without the leading v (for example 0.2.0 or 0.2.0-rc1)"
+      tag:
+        description: 'Version to publish, e.g. v0.2.0 (the workflow builds the commit you run it on)'
         required: true
-        type: string
-      draft:
-        description: "Create as a draft so you can review the assets before publishing"
-        type: boolean
-        default: true
-      prerelease:
-        description: "Mark as a pre-release"
-        type: boolean
-        default: false
 
+# Lets the built-in GITHUB_TOKEN create releases. No secrets to set up.
 permissions:
-  contents: write       # create the release and tag
-  id-token: write       # build provenance attestation
-  attestations: write
-
-concurrency:
-  group: release
-  cancel-in-progress: false
+  contents: write
 
 jobs:
   release:
+    name: Build and publish installers
     runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
-      - name: Validate version
+      - name: Check the tag looks like a version
         shell: pwsh
         run: |
-          if ("${{ inputs.version }}" -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "version must look like 1.2.3 or 1.2.3-rc1" }
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "Tag $env:TAG must look like v1.2.3 or v1.2.3-rc1" }
       - uses: actions/checkout@v4
-      - name: Refuse to overwrite an existing release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "v${{ inputs.version }}" 2>$null
-          if ($LASTEXITCODE -eq 0) { throw "release v${{ inputs.version }} already exists" }
-          $global:LASTEXITCODE = 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -54,39 +37,27 @@ jobs:
         run: |
           choco install nsis -y --no-progress
           "C:\Program Files (x86)\NSIS" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-      - name: Build (signed when CODESIGN_* secrets exist)
+      # build.ps1 runs vet and the tests, then builds both editions and their installers.
+      # It signs only if CODESIGN_* secrets exist; without them the installers are unsigned.
+      - name: Build
         shell: pwsh
         env:
           CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
           CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
-        run: .\scripts\build.ps1 -Version "${{ inputs.version }}"
-      - name: Checksums
-        shell: pwsh
-        run: |
-          Set-Location dist
-          Get-ChildItem *.exe | ForEach-Object { "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content SHA256SUMS.txt -Encoding ascii
-          Get-Content SHA256SUMS.txt
-      # Attestations are free for public repositories; private repositories need
-      # GitHub Enterprise Cloud, so this step switches itself off when the repo goes private.
-      - name: Attest build provenance
-        if: ${{ !github.event.repository.private }}
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: |
-            dist/*.exe
-      - name: Create release
+        run: .\scripts\build.ps1 -Version $env:TAG.Substring(1)
+      - name: Publish the GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $flags = @()
-          if ("${{ inputs.draft }}" -eq "true") { $flags += "--draft" }
-          if ("${{ inputs.prerelease }}" -eq "true") { $flags += "--prerelease" }
-          gh release create "v${{ inputs.version }}" (Get-ChildItem dist\*.exe | ForEach-Object FullName) dist\SHA256SUMS.txt `
-            --target "${{ github.sha }}" --title "v${{ inputs.version }}" --generate-notes @flags
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-v${{ inputs.version }}
-          path: |
-            dist/*.exe
-            dist/SHA256SUMS.txt
+          $files = @(Get-ChildItem dist\Visionary*Setup-*.exe | ForEach-Object FullName)
+          if ($files.Count -eq 0) { throw "no installers were built" }
+          gh release view $env:TAG 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $env:TAG exists; replacing its installers."
+            gh release upload $env:TAG @files --clobber
+          } else {
+            $global:LASTEXITCODE = 0
+            gh release create $env:TAG @files --title $env:TAG --generate-notes --target $env:GITHUB_SHA
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release failed" }
