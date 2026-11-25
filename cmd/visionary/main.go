@@ -574,6 +574,8 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
 func cmdAI(a *app.App, fs *flag.FlagSet, rest []string) {
 	server := fs.String("server", "", "path to llama-server(.exe) for GGUF models")
+	noUse := fs.Bool("no-use", false, "download or import without selecting the model")
+	quant := fs.String("quant", "", "quantisation or file name to download (e.g. Q4_K_M)")
 	pos := parse(fs, rest)
 	ctx := interruptible()
 	cfg := a.Config()
@@ -674,8 +676,41 @@ func cmdAI(a *app.App, fs *flag.FlagSet, rest []string) {
 		case "load", "unload":
 			check(a.LoadLocalModel(ctx, pos[1] == "load"))
 			ok("model %sed", pos[1])
+		case "models":
+			ms, err := a.StoredModels()
+			check(err)
+			if jsonOut {
+				emit(ms)
+				return
+			}
+			if len(ms) == 0 {
+				fmt.Println("model store is empty (visionary ai local hf get <repo> | visionary ai local import <file.gguf>)")
+			}
+			for _, m := range ms {
+				note := ""
+				if m.Path == cfg.AI.Local.ModelPath {
+					note = bold("  ← in use")
+				}
+				if m.ParamsB > cfg.AI.Local.MaxParamsB {
+					note += yellow("  over the limit")
+				}
+				fmt.Printf("  %-52s %5.2fB %6d MB  %s%s\n", m.Name, m.ParamsB, m.SizeMB, dim(m.Source), note)
+			}
+			fmt.Println(dim("store: " + app.ModelDir()))
+		case "import":
+			m, err := a.ImportModel(need(pos, 2, "a .gguf file"), !*noUse)
+			check(err)
+			ok("imported %s (%.2fB parameters, sha256 %s…)", m.Name, m.ParamsB, m.SHA256[:12])
+			if !*noUse {
+				fmt.Println(dim("  selected; llama-server must be available (--server <path>) to run it"))
+			}
+		case "remove":
+			check(a.RemoveStoredModel(need(pos, 2, "a model name (visionary ai local models)")))
+			ok("removed %s", pos[2])
+		case "hf":
+			hfCommand(ctx, a, pos, fs, *noUse, *quant, jsonOut)
 		default:
-			fail(errors.New("usage: visionary ai local list|pull <model>|use <model>|gguf <file>|load|unload"))
+			fail(errors.New("usage: visionary ai local list|pull <model>|use <model>|gguf <file>|models|import <file>|remove <name>|hf search|files|get|set-token|load|unload"))
 		}
 	case "cloud":
 		switch arg(pos, 1) {
@@ -932,5 +967,78 @@ func cmdSettings(a *app.App, fs *flag.FlagSet, rest []string) {
 		ok("settings reset")
 	default:
 		fail(errors.New("usage: visionary settings show|set <key> <value>|reset [--all]"))
+	}
+}
+
+// hfCommand implements `visionary ai local hf ...`.
+func hfCommand(ctx context.Context, a *app.App, pos []string, fs *flag.FlagSet, noUse bool, quant string, jsonOut bool) {
+	switch arg(pos, 2) {
+	case "search":
+		models, err := a.HFSearch(ctx, strings.Join(pos[3:], " "))
+		check(err)
+		if jsonOut {
+			emit(models)
+			return
+		}
+		limit := a.Config().AI.Local.MaxParamsB
+		for _, m := range models {
+			note := ""
+			if m.ParamsB > 0 {
+				note = fmt.Sprintf("%.1fB", m.ParamsB)
+				if m.ParamsB > limit {
+					note += yellow(" over the limit")
+				}
+			}
+			if m.Gated {
+				note += dim(" gated")
+			}
+			fmt.Printf("  %-55s %8d downloads  %s\n", bold(m.ID), m.Downloads, note)
+		}
+		if len(models) == 0 {
+			fmt.Println("no GGUF repositories found")
+		}
+		fmt.Println(dim("next: visionary ai local hf files <repo>   then   visionary ai local hf get <repo> [--quant Q4_K_M]"))
+	case "files":
+		files, err := a.HFFiles(ctx, need(pos, 3, "a repository (owner/name)"))
+		check(err)
+		if jsonOut {
+			emit(files)
+			return
+		}
+		for _, f := range files {
+			note := ""
+			if f.Sharded {
+				note = yellow("  split file: not supported")
+			}
+			fmt.Printf("  %-56s %-8s %6d MB%s\n", f.Name, f.Quant, f.SizeMB, note)
+		}
+	case "get":
+		ref := need(pos, 3, "a repository, e.g. unsloth/Qwen3-1.7B-GGUF")
+		last := time.Time{}
+		m, err := a.HFGet(ctx, ref, quant, !noUse, func(done, total int64) {
+			if color && (time.Since(last) > 250*time.Millisecond || done == total) {
+				last = time.Now()
+				pct := 0
+				if total > 0 {
+					pct = int(done * 100 / total)
+				}
+				fmt.Printf("\r\x1b[K%s", dim(fmt.Sprintf("downloading %d%%  %d / %d MB", pct, done>>20, total>>20)))
+			}
+		})
+		if color {
+			fmt.Print("\r\x1b[K")
+		}
+		check(err)
+		ok("%s ready (%.2fB parameters, checksum verified)", m.Name, m.ParamsB)
+		if !noUse {
+			fmt.Println(dim("  selected; llama-server must be available (visionary ai local gguf --server <path>) to run it"))
+		}
+	case "set-token":
+		tok, err := secure.PromptPassword("Hugging Face read token (empty to clear): ")
+		check(err)
+		check(a.SetSecret("huggingface", tok))
+		ok("token saved (used only for gated models)")
+	default:
+		fail(errors.New("usage: visionary ai local hf search <text>|files <repo>|get <repo[:quant]> [--quant Q] [--no-use]|set-token"))
 	}
 }

@@ -48,7 +48,26 @@ type server struct {
 	token string
 	host  string
 	job   job
+	dl    download
 	ctx   context.Context
+}
+
+// download is the one model download the dashboard runs at a time.
+type download struct {
+	mu      sync.Mutex
+	Running bool   `json:"running"`
+	Ref     string `json:"ref"`
+	Done    int64  `json:"done"`
+	Total   int64  `json:"total"`
+	Error   string `json:"error,omitempty"`
+	Result  string `json:"result,omitempty"`
+	cancel  context.CancelFunc
+}
+
+func (d *download) snapshot() map[string]any {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return map[string]any{"running": d.Running, "ref": d.Ref, "done": d.Done, "total": d.Total, "error": d.Error, "result": d.Result}
 }
 
 // Serve runs the dashboard until ctx is cancelled.
@@ -388,9 +407,14 @@ func (s *server) ai(r *http.Request) (any, error) {
 		if models == nil {
 			models = []ai.LocalModel{}
 		}
+		stored, _ := s.a.StoredModels()
+		if stored == nil {
+			stored = []ai.StoredModel{}
+		}
 		return map[string]any{"mode": cfg.AI.Mode, "local": cfg.AI.Local, "cloud": cfg.AI.Cloud,
 			"cloud_key_set": secure.Secret("anthropic") != "", "vt_key_set": secure.Secret("virustotal") != "",
-			"recommended": ai.RecommendedFor(cfg.AI.Local.MaxParamsB), "models": models, "ollama": runtime}, nil
+			"recommended": ai.RecommendedFor(cfg.AI.Local.MaxParamsB), "models": models, "ollama": runtime,
+			"stored": stored, "download": s.dl.snapshot(), "hf_token_set": secure.Secret("huggingface") != ""}, nil
 	}
 	q, err := body(r)
 	if err != nil {
@@ -411,6 +435,29 @@ func (s *server) ai(r *http.Request) (any, error) {
 		return map[string]any{"params_b": p}, err
 	case "load":
 		return nil, s.a.LoadLocalModel(ctx, true)
+	case "hf-search":
+		return s.a.HFSearch(ctx, q.Value)
+	case "hf-files":
+		return s.a.HFFiles(ctx, q.Name)
+	case "hf-get":
+		return nil, s.startDownload(q.Name, q.Value)
+	case "hf-cancel":
+		s.dl.mu.Lock()
+		if s.dl.cancel != nil {
+			s.dl.cancel()
+		}
+		s.dl.mu.Unlock()
+		return nil, nil
+	case "hf-token":
+		return nil, s.a.SetSecret("huggingface", q.Key)
+	case "import":
+		m, err := s.a.ImportModel(q.Path, true)
+		return map[string]any{"params_b": m.ParamsB, "name": m.Name}, err
+	case "use-stored":
+		m, err := s.a.UseStoredModel(q.Name)
+		return map[string]any{"params_b": m.ParamsB}, err
+	case "remove-stored":
+		return nil, s.a.RemoveStoredModel(q.Name)
 	case "set-key":
 		if strings.TrimSpace(q.Key) == "" {
 			return nil, errors.New("paste an API key")
@@ -500,4 +547,37 @@ func (s *server) preboot(r *http.Request) (any, error) {
 		return nil, s.a.CancelBootScan()
 	}
 	return nil, errors.New("unknown action")
+}
+
+// startDownload runs a Hugging Face download in the background; the page polls
+// GET /api/ai for progress.
+func (s *server) startDownload(ref, quant string) error {
+	if strings.TrimSpace(ref) == "" {
+		return errors.New("enter a Hugging Face repository such as unsloth/Qwen3-1.7B-GGUF")
+	}
+	s.dl.mu.Lock()
+	if s.dl.Running {
+		s.dl.mu.Unlock()
+		return errors.New("a download is already running")
+	}
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.dl.Running, s.dl.Ref, s.dl.Done, s.dl.Total, s.dl.Error, s.dl.Result, s.dl.cancel = true, ref, 0, 0, "", "", cancel
+	s.dl.mu.Unlock()
+	go func() {
+		defer cancel()
+		m, err := s.a.HFGet(ctx, ref, quant, true, func(done, total int64) {
+			s.dl.mu.Lock()
+			s.dl.Done, s.dl.Total = done, total
+			s.dl.mu.Unlock()
+		})
+		s.dl.mu.Lock()
+		defer s.dl.mu.Unlock()
+		s.dl.Running = false
+		if err != nil {
+			s.dl.Error = err.Error()
+			return
+		}
+		s.dl.Result = fmt.Sprintf("%s ready (%.2fB parameters)", m.Name, m.ParamsB)
+	}()
+	return nil
 }

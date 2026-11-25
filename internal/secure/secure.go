@@ -98,8 +98,9 @@ func saveSecrets(m map[string]string) error {
 
 // envNames maps a secret to the environment variable that overrides it.
 var envNames = map[string]string{
-	"anthropic":  "ANTHROPIC_API_KEY",
-	"virustotal": "VISIONARY_VT_KEY",
+	"anthropic":   "ANTHROPIC_API_KEY",
+	"virustotal":  "VISIONARY_VT_KEY",
+	"huggingface": "HF_TOKEN",
 }
 
 // Secret returns a stored secret, or its environment override.

@@ -78,6 +78,11 @@ Legend: [ ] not run, PASS / FAIL / N/A.
 ## 9. AI
 - [ ] Ollama installed: `ai local list/pull/use`; models over 3B are refused (try a 7B).
 - [ ] llama-server + GGUF: `ai local gguf <file>`; over-limit GGUF refused; server auto-start with `--server`.
+- [ ] `ai local hf search/files/get` downloads a small GGUF (e.g. a 1B Q4_K_M); progress shown, file lands in `C:\ProgramData\VisionaryAV\models`.
+- [ ] Interrupt a download (Ctrl+C), rerun the same command: it resumes; final checksum passes.
+- [ ] A >3B GGUF (e.g. a 7B Q4) is refused and nothing is left in the store; gated model without token gives the clear message.
+- [ ] `ai local import <your.gguf>` copies the file; `models`, `use`, `remove` work; removing the in-use model clears the selection.
+- [ ] Dashboard AI tab: search, pick, download with progress, cancel, import, delete.
 - [ ] `ai test` passes for local and cloud providers.
 - [ ] Cloud: `ai cloud set-key` stores key (not echoed, not in settings.json); bad key gives a clear error.
 - [ ] Hybrid: cloud is contacted only when the local model is unsure (check with a proxy/Fiddler).

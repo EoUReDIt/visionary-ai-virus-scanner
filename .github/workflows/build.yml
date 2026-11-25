@@ -41,6 +41,11 @@ jobs:
         shell: bash
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"; else echo "version=0.1.0-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"; fi
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          "C:\Program Files (x86)\NSIS" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - name: Build binaries and installer
         shell: pwsh
         run: .\scripts\build.ps1 -Version "${{ steps.v.outputs.version }}"
@@ -71,6 +76,19 @@ jobs:
           Write-Host "lite guard idle working set: $mb MB, cpu seconds: $($p.TotalProcessorTime.TotalSeconds)"
           Stop-Process $p -Force
           if ($mb -gt 100) { throw "idle working set $mb MB exceeds the 100 MB budget" }
+      - name: Signing pipeline self-test (throwaway certificate)
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Visionary CI self-test" -CertStoreLocation Cert:\CurrentUser\My
+          $pw = ConvertTo-SecureString "ci-selftest" -AsPlainText -Force
+          $pfx = Join-Path $env:RUNNER_TEMP "selftest.pfx"
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pw | Out-Null
+          $env:CODESIGN_PFX_BASE64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx))
+          $env:CODESIGN_PFX_PASSWORD = "ci-selftest"
+          $copy = Join-Path $env:RUNNER_TEMP "signed-copy.exe"
+          Copy-Item dist\visionary.exe $copy
+          .\scripts\sign.ps1 $copy
+          if (-not (Get-AuthenticodeSignature $copy).SignerCertificate) { throw "self-test signature missing" }
       - uses: actions/upload-artifact@v4
         with:
           name: visionary-windows-${{ steps.v.outputs.version }}
