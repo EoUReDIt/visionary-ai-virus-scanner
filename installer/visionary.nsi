@@ -59,9 +59,17 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Visionary Contributors"
 !ifndef LITE
   ; Launch through explorer.exe so the dashboard opens in the user's normal
   ; (non-elevated) desktop session and opens the browser cleanly.
-  !define MUI_FINISHPAGE_RUN "$WINDIR\explorer.exe"
-  !define MUI_FINISHPAGE_RUN_PARAMETERS '"$INSTDIR\VisionaryUI.exe"'
+  ; A function is used because newer NSIS/MUI2 builds mis-quote RUN_PARAMETERS
+  ; (the embedded quotes make Exec receive 2 parameters and abort the build).
+  !define MUI_FINISHPAGE_RUN ""
+  !define MUI_FINISHPAGE_RUN_FUNCTION LaunchDashboard
   !define MUI_FINISHPAGE_RUN_TEXT "Open the Visionary AI Protection dashboard"
+!endif
+
+!ifndef LITE
+Function LaunchDashboard
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\VisionaryUI.exe"'
+FunctionEnd
 !endif
 
 !insertmacro MUI_PAGE_WELCOME
