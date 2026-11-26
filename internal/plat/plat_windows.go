@@ -275,16 +275,92 @@ func Reboot() error {
 }
 
 func OpenBrowser(url string) error {
-	// An app-mode Edge window makes the dashboard feel like a native app.
-	for _, edge := range []string{
+	// Using a dedicated --user-data-dir with --app and --new-window guarantees
+	// Edge/Chrome opens a visible foreground app window with its own taskbar
+	// button even when the user's main browser is already running (or at a
+	// different UAC elevation level).
+	profileBase := os.Getenv("LOCALAPPDATA")
+	if profileBase == "" {
+		profileBase = os.TempDir()
+	}
+	profileDir := filepath.Join(profileBase, "VisionaryUI", "WebProfile")
+	_ = os.MkdirAll(profileDir, 0o755)
+
+	candidates := []string{
 		filepath.Join(os.Getenv("ProgramFiles(x86)"), `Microsoft\Edge\Application\msedge.exe`),
 		filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
-	} {
-		if exists(edge) {
-			return exec.Command(edge, "--app="+url, "--window-size=1180,820").Start()
+		filepath.Join(os.Getenv("ProgramFiles"), `Google\Chrome\Application\chrome.exe`),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), `Google\Chrome\Application\chrome.exe`),
+		filepath.Join(os.Getenv("LOCALAPPDATA"), `Google\Chrome\Application\chrome.exe`),
+	}
+	for _, browser := range candidates {
+		if exists(browser) {
+			cmd := exec.Command(browser,
+				"--app="+url,
+				"--new-window",
+				"--window-size=1220,820",
+				"--no-first-run",
+				"--no-default-browser-check",
+				"--user-data-dir="+profileDir,
+			)
+			if err := cmd.Start(); err == nil {
+				return nil
+			}
 		}
 	}
 	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+}
+
+var (
+	kernel32                  = windows.NewLazySystemDLL("kernel32.dll")
+	procGetConsoleProcessList = kernel32.NewProc("GetConsoleProcessList")
+	user32                    = windows.NewLazySystemDLL("user32.dll")
+	procMessageBoxW           = user32.NewProc("MessageBoxW")
+)
+
+// LaunchedFromExplorer reports whether this console process owns its console
+// window alone (e.g. double-clicked in Windows Explorer rather than run from
+// an existing PowerShell/CMD terminal).
+func LaunchedFromExplorer() bool {
+	var pids [4]uint32
+	n, _, _ := procGetConsoleProcessList.Call(uintptr(unsafe.Pointer(&pids[0])), uintptr(len(pids)))
+	return n == 1
+}
+
+// AcquireUILock claims a per-session Win32 named mutex so VisionaryUI cannot
+// spawn duplicate dashboard servers on multiple localhost ports. The Windows
+// kernel releases the mutex automatically if the process exits or crashes.
+func AcquireUILock() (release func(), alreadyRunning bool) {
+	name, err := windows.UTF16PtrFromString(`Local\VisionaryUI_SingleInstance`)
+	if err != nil {
+		return func() {}, false
+	}
+	h, err := windows.CreateMutex(nil, false, name)
+	if h == 0 {
+		return func() {}, false
+	}
+	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		_ = windows.CloseHandle(h)
+		return func() {}, true
+	}
+	return func() { _ = windows.CloseHandle(h) }, false
+}
+
+// ShowAlreadyRunningDialog displays a native Windows warning dialog when the
+// user launches Visionary while it is already running. Returns true if the
+// user clicked OK (to bring the existing dashboard to the front).
+func ShowAlreadyRunningDialog(title, message string) bool {
+	t, _ := windows.UTF16PtrFromString(title)
+	m, _ := windows.UTF16PtrFromString(message)
+	const (
+		mbOKCancel        = 0x00000001
+		mbIconInformation = 0x00000040
+		mbSetForeground   = 0x00010000
+		idOK              = 1
+	)
+	ret, _, _ := procMessageBoxW.Call(0, uintptr(unsafe.Pointer(m)), uintptr(unsafe.Pointer(t)),
+		uintptr(mbOKCancel|mbIconInformation|mbSetForeground))
+	return ret == idOK
 }
 
 type winWatcher struct {

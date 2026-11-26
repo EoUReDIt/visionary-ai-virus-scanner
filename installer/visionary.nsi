@@ -74,7 +74,15 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Visionary Contributors"
   !define MUI_WELCOMEPAGE_TEXT "This wizard installs ${APP} ${VERSION} on your PC.$\r$\n$\r$\nVisionary layers fast local detection (hashes, YARA rules, full PE/script heuristics, certificate checks, LOLBin behaviour monitoring) with optional local (<3B) and cloud AI triage.$\r$\n$\r$\nClick Next to continue."
 !endif
 
-!ifndef LITE
+!ifdef LITE
+  !define MUI_FINISHPAGE_RUN ""
+  !define MUI_FINISHPAGE_RUN_FUNCTION LaunchLiteConsole
+  !define MUI_FINISHPAGE_RUN_TEXT "Open Visionary Lite console (show status & commands)"
+
+Function LaunchLiteConsole
+  Exec '"$SYSDIR\cmd.exe" /k ""$INSTDIR\visionary.exe" status & echo. & echo Commands: visionary scan quick --deep ^| visionary ai status ^| visionary help"'
+FunctionEnd
+!else
   ; Launch through explorer.exe so the dashboard opens in the user's normal
   ; (non-elevated) desktop session and opens the browser cleanly.
   ; A function is used because newer NSIS/MUI2 builds mis-quote RUN_PARAMETERS
@@ -82,9 +90,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Visionary Contributors"
   !define MUI_FINISHPAGE_RUN ""
   !define MUI_FINISHPAGE_RUN_FUNCTION LaunchDashboard
   !define MUI_FINISHPAGE_RUN_TEXT "Open the ${APP} dashboard"
-!endif
 
-!ifndef LITE
 Function LaunchDashboard
   Exec '"$WINDIR\explorer.exe" "$INSTDIR\VisionaryUI.exe"'
 FunctionEnd
@@ -166,7 +172,9 @@ Section "${APP} (required)" SecCore
   ; Keep one unified Start Menu folder across Core, Lite and Safe upgrades.
   RMDir /r "$SMPROGRAMS\Visionary Lite"
   CreateDirectory "$SMPROGRAMS\${INSTALL_FOLDER}"
-!ifndef LITE
+!ifdef LITE
+  CreateShortcut "$SMPROGRAMS\${INSTALL_FOLDER}\Visionary Lite Console.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\visionary.exe" status & echo. & echo Type visionary help for all commands."' "$INSTDIR\visionary.exe"
+!else
   CreateShortcut "$SMPROGRAMS\${INSTALL_FOLDER}\Visionary.lnk" "$INSTDIR\VisionaryUI.exe"
 !endif
   CreateShortcut "$SMPROGRAMS\${INSTALL_FOLDER}\${APP} Quick Scan.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\visionary.exe" scan quick --deep"' "$INSTDIR\visionary.exe"

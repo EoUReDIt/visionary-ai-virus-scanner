@@ -163,3 +163,15 @@ func EnableANSI() bool { return true }
 
 // UpdateSystemPath is Windows-only.
 func UpdateSystemPath(string, bool) error { return ErrUnsupported }
+
+// LaunchedFromExplorer is Windows-only.
+func LaunchedFromExplorer() bool { return false }
+
+// AcquireUILock is a no-op on non-Windows; ui.Serve also verifies live TCP listeners.
+func AcquireUILock() (release func(), alreadyRunning bool) { return func() {}, false }
+
+// ShowAlreadyRunningDialog prints the warning to stderr on non-Windows systems.
+func ShowAlreadyRunningDialog(title, message string) bool {
+	_, _ = os.Stderr.WriteString(title + ": " + message + "\n")
+	return false
+}

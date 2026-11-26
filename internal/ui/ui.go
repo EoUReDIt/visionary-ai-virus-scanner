@@ -14,6 +14,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +24,7 @@ import (
 
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/ai"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/app"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/defs"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/plat"
@@ -70,14 +74,124 @@ func (d *download) snapshot() map[string]any {
 	return map[string]any{"running": d.Running, "ref": d.Ref, "done": d.Done, "total": d.Total, "error": d.Error, "result": d.Result}
 }
 
+func uiSessionDir() string {
+	if base, err := os.UserCacheDir(); err == nil && base != "" {
+		dir := filepath.Join(base, "VisionaryUI")
+		if err := os.MkdirAll(dir, 0o700); err == nil {
+			return dir
+		}
+	}
+	return config.Dir()
+}
+
+func uiURLFile() string { return filepath.Join(uiSessionDir(), "ui.url") }
+
+// activeDashboardURL returns the live dashboard URL if an existing VisionaryUI
+// instance is currently accepting connections on its recorded localhost port.
+func activeDashboardURL() (fullURL, displayHost string, alive bool) {
+	b, err := os.ReadFile(uiURLFile())
+	if err != nil {
+		return "", "", false
+	}
+	raw := strings.TrimSpace(string(b))
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", "", false
+	}
+	conn, err := net.DialTimeout("tcp", u.Host, 250*time.Millisecond)
+	if err != nil {
+		return "", "", false
+	}
+	_ = conn.Close()
+	return raw, "http://" + u.Host, true
+}
+
+// writeDashboardLauncher creates a local dashboard.html redirect file pointing
+// to the active localhost dashboard URL in the current work folder (when
+// writable) and in Visionary's data/session folder. Returns the written paths
+// so they can be cleaned up on exit.
+func writeDashboardLauncher(dashURL, host string) []string {
+	html := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0; url=%s">
+<title>Visionary AI Protection</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1017;color:#e8eef7;font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+  .box{background:#111722;border:1px solid #232e42;border-radius:10px;padding:24px 28px;max-width:440px;text-align:center}
+  h1{margin:0 0 8px;font-size:18px}
+  p{margin:0 0 16px;color:#8c98ad}
+  a{display:inline-block;background:#10b981;color:#03140e;text-decoration:none;font-weight:600;padding:9px 16px;border-radius:7px}
+  code{display:block;margin-top:14px;font:12px ui-monospace,Consolas,monospace;color:#8c98ad}
+</style>
+</head>
+<body>
+  <div class="box">
+    <h1>Visionary AI Protection</h1>
+    <p>Redirecting to the local Visionary dashboard…</p>
+    <a href="%s">Open Visionary Dashboard</a>
+    <code>http://%s</code>
+  </div>
+  <script>window.location.replace(%q);</script>
+</body>
+</html>
+`, dashURL, dashURL, host, dashURL)
+
+	var candidates []string
+	if wd, err := os.Getwd(); err == nil && wd != "" {
+		candidates = append(candidates, filepath.Join(wd, "dashboard.html"))
+	}
+	candidates = append(candidates, config.Path("dashboard.html"), filepath.Join(uiSessionDir(), "dashboard.html"))
+
+	seen := map[string]bool{}
+	var written []string
+	for _, p := range candidates {
+		key := strings.ToLower(filepath.Clean(p))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if err := os.WriteFile(p, []byte(html), 0o600); err == nil {
+			written = append(written, p)
+		}
+	}
+	return written
+}
+
 // Serve runs the dashboard until ctx is cancelled.
 func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
+	releaseLock, alreadyRunning := plat.AcquireUILock()
+	existingURL, displayHost, alive := activeDashboardURL()
+	if alreadyRunning || alive {
+		if releaseLock != nil {
+			releaseLock()
+		}
+		where := displayHost
+		if where == "" {
+			if port == 0 {
+				port = a.Config().UI.Port
+			}
+			where = fmt.Sprintf("http://127.0.0.1:%d", port)
+		}
+		fmt.Fprintf(os.Stderr, "warning: Visionary dashboard is already running at %s (preventing duplicate instance)\n", where)
+		if open {
+			msg := fmt.Sprintf("Visionary AI Protection is already running at %s.\n\nNo duplicate instance will be started.\n\nClick OK to reopen the existing dashboard window, or Cancel to close this notice.", where)
+			if plat.ShowAlreadyRunningDialog("Visionary AI Protection — Already Running", msg) && existingURL != "" {
+				_ = plat.OpenBrowser(existingURL)
+			}
+			return nil
+		}
+		return fmt.Errorf("Visionary dashboard is already running at %s", where)
+	}
+	defer releaseLock()
+
 	if port == 0 {
 		port = a.Config().UI.Port
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
 	if err != nil {
-		// The preferred port is taken (perhaps another dashboard): any free one.
+		// The preferred port is taken by another application: pick any free localhost port.
 		if ln, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
 			return err
 		}
@@ -87,7 +201,17 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 		return err
 	}
 	s := &server{a: a, token: hex.EncodeToString(raw), host: ln.Addr().String(), ctx: ctx}
-	url := fmt.Sprintf("http://%s/#t=%s", s.host, s.token)
+	dashURL := fmt.Sprintf("http://%s/#t=%s", s.host, s.token)
+
+	_ = os.WriteFile(uiURLFile(), []byte(dashURL), 0o600)
+	defer func() { _ = os.Remove(uiURLFile()) }()
+
+	launchers := writeDashboardLauncher(dashURL, s.host)
+	defer func() {
+		for _, p := range launchers {
+			_ = os.Remove(p)
+		}
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.index)
@@ -134,10 +258,16 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 		_ = srv.Shutdown(shut)
 	}()
 
-	fmt.Println("Visionary dashboard:", url)
+	fmt.Println("Visionary dashboard:", dashURL)
+	if len(launchers) > 0 {
+		fmt.Println("Dashboard launcher:", launchers[0])
+	}
 	fmt.Println("(the link carries a one-time access token; Ctrl+C to stop)")
 	if open {
-		_ = plat.OpenBrowser(url)
+		go func() {
+			time.Sleep(120 * time.Millisecond)
+			_ = plat.OpenBrowser(dashURL)
+		}()
 	}
 	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		return err

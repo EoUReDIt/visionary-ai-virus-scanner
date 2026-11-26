@@ -1,6 +1,7 @@
 dist/
 *.exe
 *.syso
+dashboard.html
 !installer/*.nsi
 node_modules/
 
