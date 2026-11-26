@@ -138,3 +138,15 @@ func TestParameterLimit(t *testing.T) {
 		t.Error("ParseParamSize")
 	}
 }
+
+func TestRichVerdictParsing(t *testing.T) {
+	raw := `{"verdict":"malicious","confidence":0.93,"category":"lolbin","recommended_action":"quarantine","summary":"Word spawned encoded PowerShell downloading a remote stage.","reasons":["Office parent spawned PowerShell","Base64 payload with IEX"]}`
+	v, err := ParseVerdict(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Category != "lolbin" || v.RecommendedAction != "quarantine" || v.Summary == "" || len(v.Reasons) != 2 {
+		t.Fatalf("unexpected rich verdict: %+v", v)
+	}
+}
+

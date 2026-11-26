@@ -1,63 +1,148 @@
 name: Release
 
-# Publishes the Windows installers to a GitHub Release (a permanent download page;
-# open to anyone if the repo is public, to people with access if it's private).
-# Runs when you push a version tag like v0.2.0, or from the Actions tab with "Run workflow".
+# Publishes Visionary Windows builds to a GitHub Release:
+#   - NSIS Installers (Recommended for everyday Windows protection: installs the
+#     real-time service, Defender co-existence, PATH, Start Menu & uninstaller)
+#   - Standalone Portable .exe binaries (Zero-install CLI/GUI for devs, gamers & CI)
+#   - SHA256SUMS.txt checksums for every uploaded binary
+#
+# Runs automatically when you push a version tag like v0.2.0, or manually via
+# Actions -> Release -> Run workflow (where you can also pick both / nsis / exe).
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Version to publish, e.g. v0.2.0 (the workflow builds the commit you run it on)'
+        description: 'Version tag to publish, e.g. v0.2.0'
         required: true
+      package_format:
+        description: 'Artifacts to publish (both = NSIS installers + standalone portable .exe)'
+        type: choice
+        default: both
+        options:
+          - both
+          - nsis
+          - exe
+      prerelease:
+        description: 'Mark GitHub Release as a pre-release'
+        type: boolean
+        default: false
 
-# Lets the built-in GITHUB_TOKEN create releases. No secrets to set up.
 permissions:
   contents: write
 
 jobs:
   release:
-    name: Build and publish installers
+    name: Build, verify and publish Windows release
     runs-on: windows-latest
     timeout-minutes: 25
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
+      PACKAGE_FORMAT: ${{ inputs.package_format || 'both' }}
+      PRERELEASE: ${{ inputs.prerelease || false }}
     steps:
-      - name: Check the tag looks like a version
+      - name: Validate version tag
         shell: pwsh
         run: |
-          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "Tag $env:TAG must look like v1.2.3 or v1.2.3-rc1" }
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') {
+            throw "Tag $env:TAG must look like v0.2.0 or v0.2.0-rc1"
+          }
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - name: Install NSIS
+        if: env.PACKAGE_FORMAT == 'both' || env.PACKAGE_FORMAT == 'nsis'
         shell: pwsh
         run: |
           choco install nsis -y --no-progress
           "C:\Program Files (x86)\NSIS" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-      # build.ps1 runs vet and the tests, then builds both editions and their installers.
-      # It signs only if CODESIGN_* secrets exist; without them the installers are unsigned.
-      - name: Build
+      # build.ps1 runs go vet & go test (full + lite), builds and optionally signs
+      # all executables, builds NSIS installers, and generates SHA256SUMS.txt.
+      - name: Build release artifacts
         shell: pwsh
         env:
           CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
           CODESIGN_PFX_PASSWORD: ${{ secrets.CODESIGN_PFX_PASSWORD }}
-        run: .\scripts\build.ps1 -Version $env:TAG.Substring(1)
-      - name: Publish the GitHub Release
+          CODESIGN_TIMESTAMP_URL: ${{ secrets.CODESIGN_TIMESTAMP_URL }}
+        run: |
+          $ver = $env:TAG.Substring(1)
+          .\scripts\build.ps1 -Version $ver -PackageFormat $env:PACKAGE_FORMAT
+      - name: Smoke test binaries before publishing
+        shell: pwsh
+        run: |
+          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-rel"
+          .\dist\visionary.exe version
+          .\dist\visionary.exe status
+          .\dist\visionary.exe ai status
+          .\dist\visionary.exe scan .\scripts --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Full edition smoke scan failed (exit $LASTEXITCODE)" }
+
+          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-rel-lite"
+          .\dist\visionary-lite.exe version
+          .\dist\visionary-lite.exe status
+          .\dist\visionary-lite.exe scan .\scripts --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Lite edition smoke scan failed (exit $LASTEXITCODE)" }
+      - name: Publish GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $files = @(Get-ChildItem dist\Visionary*Setup-*.exe | ForEach-Object FullName)
-          if ($files.Count -eq 0) { throw "no installers were built" }
+          $ver = $env:TAG.Substring(1)
+          $files = @()
+          if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'nsis') {
+            $files += @(Get-ChildItem "dist\Visionary*Setup-$ver.exe" -ErrorAction SilentlyContinue | ForEach-Object FullName)
+          }
+          if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'exe') {
+            $files += @(Get-ChildItem "dist\*-$ver-windows-amd64.exe" -ErrorAction SilentlyContinue | ForEach-Object FullName)
+          }
+          if (Test-Path "dist\SHA256SUMS.txt") {
+            $files += (Resolve-Path "dist\SHA256SUMS.txt").Path
+          }
+          if ($files.Count -eq 0) { throw "No release artifacts were produced" }
+
+          $notesFile = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          $notes = @()
+          $notes += "## Which download should I pick?"
+          $notes += ""
+          if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'nsis') {
+            $notes += "### Windows Installer — NSIS (Recommended for full protection)"
+            $notes += "Installs to ``Program Files\Visionary``, registers the real-time Windows Service, configures Microsoft Defender co-existence exclusions, adds ``visionary`` to ``PATH``, and includes a clean Windows uninstaller."
+            $notes += "- **``Visionary-Setup-$ver.exe``** — Full edition (AI Protection Dashboard + CLI + Real-Time Guard)"
+            $notes += "- **``Visionary-Lite-Setup-$ver.exe``** — Lite CPU-only edition (no dashboard, low idle RAM/CPU)"
+            $notes += ""
+          }
+          if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'exe') {
+            $notes += "### Standalone Portable Executables (.exe — No install required)"
+            $notes += "Run directly from any folder or CI runner with no installer or admin elevation needed for on-demand scans."
+            $notes += "- **``VisionaryUI-$ver-windows-amd64.exe``** — Portable Dashboard + Real-Time Guard"
+            $notes += "- **``visionary-$ver-windows-amd64.exe``** — Portable Full CLI"
+            $notes += "- **``visionary-lite-$ver-windows-amd64.exe``** — Portable Lite CPU-only CLI"
+            $notes += ""
+          }
+          $notes += "### Verify integrity (PowerShell)"
+          $notes += '```powershell'
+          $notes += "Get-FileHash Visionary-Setup-$ver.exe -Algorithm SHA256"
+          $notes += '```'
+          $notes += "Compare against ``SHA256SUMS.txt`` attached below."
+          $notes += ""
+          $notes += "> **Windows SmartScreen:** Unsigned builds may show *Windows protected your PC* — click **More info -> Run anyway**, or verify the SHA-256 hash above."
+          Set-Content -Path $notesFile -Value $notes -Encoding utf8
+
+          $extra = @()
+          if ($env:PRERELEASE -eq 'true' -or $env:TAG -match '-') {
+            $extra += '--prerelease'
+          }
+
           gh release view $env:TAG 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Release $env:TAG exists; replacing its installers."
+            Write-Host "Release $env:TAG already exists; replacing assets and updating notes."
             gh release upload $env:TAG @files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
+            gh release edit $env:TAG --notes-file $notesFile
           } else {
             $global:LASTEXITCODE = 0
-            gh release create $env:TAG @files --title $env:TAG --generate-notes --target $env:GITHUB_SHA
+            gh release create $env:TAG @files --title "Visionary $env:TAG" --notes-file $notesFile --generate-notes --target $env:GITHUB_SHA @extra
           }
           if ($LASTEXITCODE -ne 0) { throw "gh release failed" }

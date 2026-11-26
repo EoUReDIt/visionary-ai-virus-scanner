@@ -19,14 +19,15 @@ and/or a cloud model through your own API key.
 | 4 | Import definitions | `visionary defs import <file>` (hash lists, CSV, ClamAV hdb/hsb/cvd, .yar, cert lists) |
 | 5 | Definition channels | `visionary defs channel add <name> <url>` / `update` |
 | 6 | Local AI (<3B) | `visionary ai local ...`, `ai recommend` |
-| 7 | Cloud AI by API key | `visionary ai cloud ...` (key stored with DPAPI) |
-| 8 | Pre-boot scan | `visionary preboot schedule`, `windows offline-scan` |
-| 9 | Quick scan | `visionary scan quick` |
-| 10 | Targeted scan | `visionary scan <path>` |
-| 11 | Behaviour learning | `visionary behavior learn start/stop`, anomalies in `events` |
-| 12 | Disable / re-enable | `visionary protection disable --for 30m\|--until-restart\|--permanent`, `protection enable` |
-| 13 | Password-gated settings reset | `visionary settings reset [--all]` |
-| 14 | Installer | `installer/visionary.nsi` -> `Visionary-Setup-<ver>.exe` |
+| 7 | Cloud AI (Gemini / Claude / OpenAI) | `visionary ai cloud provider <id>`, `ai cloud set-key` (DPAPI encrypted) |
+| 8 | AI Sensitivity & LOLBin Triage | `visionary ai sensitivity conservative\|balanced\|proactive` |
+| 9 | Pre-boot scan | `visionary preboot schedule`, `windows offline-scan` |
+| 10 | Quick scan | `visionary scan quick` |
+| 11 | Targeted scan | `visionary scan <path>` |
+| 12 | Behaviour learning | `visionary behavior learn start/stop`, anomalies in `events` |
+| 13 | Disable / re-enable | `visionary protection disable --for 30m\|--until-restart\|--permanent`, `protection enable` |
+| 14 | Password-gated settings reset | `visionary settings reset [--all]` |
+| 15 | Installer & Portable `.exe` | `Visionary-Setup-<ver>.exe` (NSIS) + `VisionaryUI-<ver>-windows-amd64.exe` |
 
 Run `visionary help` for the full command list. Exit codes: 0 clean, 1 malicious, 2 suspicious, 3 error.
 Add `--json` where offered for scripting.
@@ -40,18 +41,23 @@ See [docs/LITE.md](docs/LITE.md).
 
 ## Install
 
-**Easiest:** open this repo's **Releases** page, pick the latest release and download
-`Visionary-Setup-x.y.z.exe` (or `Visionary-Lite-Setup-x.y.z.exe` for the CPU-only edition), then run it.
-Releases are permanent and not zipped. While the repo is private you need to be signed in to GitHub with access.
+**Recommended (NSIS Installer):** open this repo's **Releases** page and download
+`Visionary-Setup-x.y.z.exe` (or `Visionary-Lite-Setup-x.y.z.exe` for the CPU-only edition). The NSIS
+installer registers the real-time Windows Service, configures Microsoft Defender co-existence exclusions,
+adds `visionary` to `PATH`, and provides a clean Windows uninstaller.
 
-**Latest test build:** every push also builds the installers: **Actions** -> **build** -> latest green run -> **Artifacts**.
+**Portable / Zero-Install (`.exe`):** prefer no installer or admin elevation for on-demand scans? Download
+`VisionaryUI-x.y.z-windows-amd64.exe` (dashboard + guard), `visionary-x.y.z-windows-amd64.exe` (full CLI),
+or `visionary-lite-x.y.z-windows-amd64.exe` directly from the same release, and verify against `SHA256SUMS.txt`.
+
+**Latest test build:** every push also builds binaries and installers under **Actions** -> **build** -> **Artifacts**.
 
 **Publishing a release** (maintainers): push a version tag (`git tag v0.2.0 && git push origin v0.2.0`), or use
-**Actions** -> **Release** -> **Run workflow** and type `v0.2.0`. The workflow tests, builds and publishes the installers.
-Running it again for the same tag replaces that release's installers.
+**Actions** -> **Release** -> **Run workflow** (choose `both`, `nsis`, or `exe`). The workflow tests,
+smoke-tests, builds, checksums, and publishes to GitHub Releases.
 
-The installers are not code-signed, so Windows may show a SmartScreen warning: **More info -> Run anyway**.
-Signing can be added later without changing this flow (see [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md)).
+The installers and standalone executables are unsigned unless `CODESIGN_*` secrets are configured, so Windows
+may show a SmartScreen warning: **More info -> Run anyway** (see [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md)).
 
 ## Local models: Ollama, Hugging Face or your own GGUF
 

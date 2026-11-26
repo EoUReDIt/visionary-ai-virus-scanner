@@ -48,8 +48,9 @@ const usage = `Visionary — antivirus with local and cloud AI
 
   visionary ai status|test|recommend
   visionary ai mode off|local|cloud|hybrid
+  visionary ai sensitivity conservative|balanced|proactive
   visionary ai local list|pull <model>|use <model>|gguf <file>|load|unload
-  visionary ai cloud set-key|clear-key|model <id>
+  visionary ai cloud provider gemini|claude|openai|set-key|clear-key|model <id>|endpoint <url>
   visionary ai explain <file>
   visionary reputation set-key|clear-key   VirusTotal hash lookups
 
@@ -581,28 +582,37 @@ func cmdAI(a *app.App, fs *flag.FlagSet, rest []string) {
 	cfg := a.Config()
 	switch arg(pos, 0) {
 	case "", "status":
-		st := map[string]any{"mode": cfg.AI.Mode, "local": cfg.AI.Local, "cloud": cfg.AI.Cloud,
-			"cloud_key_set": secure.Secret("anthropic") != ""}
+		prov := a.ActiveCloudProvider()
+		st := map[string]any{"mode": cfg.AI.Mode, "sensitivity": cfg.AI.Sensitivity, "local": cfg.AI.Local,
+			"cloud_provider": prov, "cloud": cfg.AI.Cloud, "cloud_key_set": a.HasCloudKey(),
+			"ai_stats": a.Engine().AIStats()}
 		if jsonOut {
 			emit(st)
 			return
 		}
-		fmt.Printf("mode   %s\n", bold(cfg.AI.Mode))
-		fmt.Printf("local  %s via %s at %s (limit %.1fB parameters)\n", cfg.AI.Local.Model, cfg.AI.Local.Provider,
+		sens := cfg.AI.Sensitivity
+		if sens == "" {
+			sens = "balanced"
+		}
+		fmt.Printf("mode        %s  (sensitivity: %s)\n", bold(cfg.AI.Mode), sens)
+		fmt.Printf("local       %s via %s at %s (limit %.1fB parameters)\n", cfg.AI.Local.Model, cfg.AI.Local.Provider,
 			cfg.AI.Local.Endpoint, cfg.AI.Local.MaxParamsB)
 		key := red("no API key")
-		if secure.Secret("anthropic") != "" {
+		if a.HasCloudKey() {
 			key = green("API key set")
 		}
 		share := "feature reports only"
 		if cfg.AI.Cloud.ShareSnippets {
 			share = "feature reports + script excerpts"
 		}
-		fmt.Printf("cloud  %s, %s, sends %s\n", cfg.AI.Cloud.Model, key, share)
+		fmt.Printf("cloud       %s / %s, %s, sends %s\n", prov, cfg.AI.Cloud.Model, key, share)
 		fmt.Println(dim("hybrid = local model first, cloud only when the local model is unsure"))
 	case "mode":
 		check(a.SetAIMode(need(pos, 1, "off, local, cloud or hybrid")))
 		ok("AI mode: %s", pos[1])
+	case "sensitivity":
+		check(a.Set("ai.sensitivity", need(pos, 1, "conservative, balanced or proactive")))
+		ok("AI sensitivity: %s", pos[1])
 	case "recommend":
 		fmt.Printf("Local models under the %.1fB-parameter limit (pull with: visionary ai local pull <model>)\n", cfg.AI.Local.MaxParamsB)
 		for _, m := range ai.RecommendedFor(cfg.AI.Local.MaxParamsB) {
@@ -713,23 +723,38 @@ func cmdAI(a *app.App, fs *flag.FlagSet, rest []string) {
 			fail(errors.New("usage: visionary ai local list|pull <model>|use <model>|gguf <file>|models|import <file>|remove <name>|hf search|files|get|set-token|load|unload"))
 		}
 	case "cloud":
+		prov := a.ActiveCloudProvider()
 		switch arg(pos, 1) {
+		case "provider":
+			p := need(pos, 2, "gemini, claude or openai")
+			check(a.Set("ai.cloud.provider", p))
+			ok("cloud provider: %s (model: %s)", p, a.Config().AI.Cloud.Model)
 		case "set-key":
-			key, err := secure.PromptPassword("Anthropic API key: ")
+			if p := arg(pos, 2); p != "" {
+				check(a.Set("ai.cloud.provider", p))
+				prov = a.ActiveCloudProvider()
+			}
+			key, err := secure.PromptPassword(strings.ToUpper(prov[:1]) + prov[1:] + " API key: ")
 			check(err)
 			if strings.TrimSpace(key) == "" {
 				fail(errors.New("empty key"))
 			}
-			check(a.SetSecret("anthropic", key))
-			ok("API key stored (encrypted); AI mode is now %s", a.Config().AI.Mode)
+			check(a.SetSecret(ai.CloudSecretName(prov), key))
+			ok("%s API key stored (encrypted); AI mode is now %s", prov, a.Config().AI.Mode)
 		case "clear-key":
-			check(a.SetSecret("anthropic", ""))
-			ok("API key removed; AI mode is now %s", a.Config().AI.Mode)
+			if p := arg(pos, 2); p != "" {
+				prov = p
+			}
+			check(a.SetSecret(ai.CloudSecretName(prov), ""))
+			ok("%s API key removed; AI mode is now %s", prov, a.Config().AI.Mode)
 		case "model":
 			check(a.Set("ai.cloud.model", need(pos, 2, "a model id")))
 			ok("cloud model: %s", pos[2])
+		case "endpoint":
+			check(a.Set("ai.cloud.endpoint", arg(pos, 2)))
+			ok("cloud endpoint updated")
 		default:
-			fail(errors.New("usage: visionary ai cloud set-key|clear-key|model <id>"))
+			fail(errors.New("usage: visionary ai cloud provider gemini|claude|openai | set-key [provider] | clear-key [provider] | model <id> | endpoint <url>"))
 		}
 	case "explain":
 		res, text, model, err := a.Explain(ctx, need(pos, 1, "a file"))
@@ -946,6 +971,7 @@ func cmdSettings(a *app.App, fs *flag.FlagSet, rest []string) {
 			keys := []string{"realtime.auto_quarantine", "scan.max_file_size_mb", "scan.workers", "scan.scan_archives",
 				"scan.use_cache", "scan.ai_budget", "behavior.enabled", "behavior.threshold",
 				"security.require_password_to_disable", "windows.defender_second_opinion", "reputation.virustotal",
+				"ai.sensitivity", "ai.confidence_threshold", "ai.cloud.provider", "ai.cloud.endpoint",
 				"ai.cloud.share_snippets", "ai.cloud.model", "ai.cloud.effort", "ai.local.endpoint", "ai.local.provider",
 				"ai.local.server_path", "ai.local.max_params_b", "ai.local.cpu_only", "ai.local.threads",
 				"ai.local.keep_alive", "realtime.workers", "realtime.settle_ms", "behavior.poll_ms", "ui.port"}

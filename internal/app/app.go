@@ -65,7 +65,11 @@ func (a *App) load() error {
 	if key := secure.Secret("virustotal"); key != "" && cfg.Reputation.VirusTotal {
 		eng.Rep = reputation.NewVirusTotal(key)
 	}
-	triage := ai.NewTriage(cfg, secure.Secret("anthropic"))
+	triage := ai.NewTriageWithSecrets(cfg, map[string]string{
+		"gemini":    secure.Secret("gemini"),
+		"anthropic": secure.Secret("anthropic"),
+		"openai":    secure.Secret("openai"),
+	})
 	if triage.Enabled() {
 		eng.AI = triage.Assess
 	}
@@ -293,28 +297,31 @@ func (a *App) Enable() error {
 // ---- status ----
 
 type Status struct {
-	Version    string           `json:"version"`
-	Edition    string           `json:"edition"`
-	Protection bool             `json:"protection"`
-	ProtReason string           `json:"protection_reason"`
-	GuardAlive bool             `json:"guard_running"`
-	GameMode   bool             `json:"game_mode"`
-	Profile    string           `json:"profile"`
-	Defs       defs.Stats       `json:"definitions"`
-	Channels   int              `json:"channels"`
-	AIMode     string           `json:"ai_mode"`
-	LocalModel string           `json:"local_model,omitempty"`
-	CloudModel string           `json:"cloud_model,omitempty"`
-	CloudKey   bool             `json:"cloud_key_set"`
-	VTKey      bool             `json:"virustotal_key_set"`
-	Quarantine int              `json:"quarantined"`
-	Learning   bool             `json:"behavior_learning"`
-	Behavior   behavior.Summary `json:"behavior"`
-	BootScan   bool             `json:"boot_scan_scheduled"`
-	Admin      bool             `json:"admin"`
-	DataDir    string           `json:"data_dir"`
-	Windows    *winsec.Status   `json:"windows_security,omitempty"`
-	Warnings   []string         `json:"warnings,omitempty"`
+	Version       string           `json:"version"`
+	Edition       string           `json:"edition"`
+	Protection    bool             `json:"protection"`
+	ProtReason    string           `json:"protection_reason"`
+	GuardAlive    bool             `json:"guard_running"`
+	GameMode      bool             `json:"game_mode"`
+	Profile       string           `json:"profile"`
+	Defs          defs.Stats       `json:"definitions"`
+	Channels      int              `json:"channels"`
+	AIMode        string           `json:"ai_mode"`
+	AISensitivity string           `json:"ai_sensitivity"`
+	LocalModel    string           `json:"local_model,omitempty"`
+	CloudProvider string           `json:"cloud_provider,omitempty"`
+	CloudModel    string           `json:"cloud_model,omitempty"`
+	CloudKey      bool             `json:"cloud_key_set"`
+	AIStats       engine.AIStats   `json:"ai_stats"`
+	VTKey         bool             `json:"virustotal_key_set"`
+	Quarantine    int              `json:"quarantined"`
+	Learning      bool             `json:"behavior_learning"`
+	Behavior      behavior.Summary `json:"behavior"`
+	BootScan      bool             `json:"boot_scan_scheduled"`
+	Admin         bool             `json:"admin"`
+	DataDir       string           `json:"data_dir"`
+	Windows       *winsec.Status   `json:"windows_security,omitempty"`
+	Warnings      []string         `json:"warnings,omitempty"`
 }
 
 func heartbeat() string { return config.Path("guard.heartbeat") }
@@ -330,13 +337,37 @@ func (a *App) Learning() bool {
 	return b.Enabled && time.Now().Before(b.LearningUntil)
 }
 
+func (a *App) ActiveCloudProvider() string {
+	p := strings.ToLower(strings.TrimSpace(a.Config().AI.Cloud.Provider))
+	if p == "" {
+		if secure.Secret("anthropic") != "" {
+			return "claude"
+		}
+		if secure.Secret("openai") != "" {
+			return "openai"
+		}
+		return "gemini"
+	}
+	return p
+}
+
+func (a *App) HasCloudKey() bool {
+	return secure.Secret(ai.CloudSecretName(a.ActiveCloudProvider())) != ""
+}
+
 func (a *App) Status(withWindows bool) *Status {
 	cfg := a.Config()
 	on, why := a.ProtectionActive()
+	cloudProv := a.ActiveCloudProvider()
+	sens := cfg.AI.Sensitivity
+	if sens == "" {
+		sens = "balanced"
+	}
 	s := &Status{
 		Version: config.Version, Edition: edition.Name, Protection: on, ProtReason: why, GuardAlive: GuardAlive(),
 		GameMode: a.GameMode(), Profile: cfg.Profile, Defs: a.db.Stats(), Channels: len(cfg.Channels),
-		AIMode: cfg.AI.Mode, CloudKey: secure.Secret("anthropic") != "", VTKey: secure.Secret("virustotal") != "",
+		AIMode: cfg.AI.Mode, AISensitivity: sens, CloudProvider: cloudProv,
+		CloudKey: a.HasCloudKey(), AIStats: a.Engine().AIStats(), VTKey: secure.Secret("virustotal") != "",
 		Quarantine: len(engine.QuarantineList()), Learning: a.Learning(),
 		Behavior: behavior.Summarize(behavior.Load()), BootScan: BootScanPending(),
 		Admin: plat.IsAdmin(), DataDir: config.Dir(), Warnings: a.Warnings,
@@ -574,6 +605,30 @@ func (a *App) Set(key, value string) error {
 			return needBool(&c.Windows.DefenderSecondOpinion)
 		case "reputation.virustotal":
 			return needBool(&c.Reputation.VirusTotal)
+		case "ai.sensitivity":
+			switch strings.ToLower(value) {
+			case "conservative", "balanced", "proactive":
+				c.AI.Sensitivity = strings.ToLower(value)
+			default:
+				return errors.New("ai.sensitivity must be conservative, balanced or proactive")
+			}
+		case "ai.confidence_threshold":
+			var f float64
+			if _, e := fmt.Sscanf(value, "%g", &f); e != nil || f < 0.5 || f > 0.99 {
+				return errors.New("ai.confidence_threshold must be between 0.50 and 0.99")
+			}
+			c.AI.ConfidenceThreshold = f
+		case "ai.cloud.provider":
+			p := strings.ToLower(strings.TrimSpace(value))
+			if p != "gemini" && p != "claude" && p != "openai" {
+				return errors.New("ai.cloud.provider must be gemini, claude or openai")
+			}
+			if c.AI.Cloud.Provider != p {
+				c.AI.Cloud.Provider = p
+				c.AI.Cloud.Model = ai.DefaultCloudModel(p)
+			}
+		case "ai.cloud.endpoint":
+			c.AI.Cloud.Endpoint = strings.TrimSpace(value)
 		case "ai.cloud.share_snippets":
 			return needBool(&c.AI.Cloud.ShareSnippets)
 		case "ai.cloud.model":

@@ -80,7 +80,7 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 		go func() {
 			defer wg.Done()
 			for p := range jobs {
-				a.guardScan(ctx, p, "real-time", nil, say)
+				a.guardScan(ctx, p, "real-time", nil, nil, say)
 			}
 		}()
 	}
@@ -199,13 +199,16 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 						continue
 					}
 					var ctxFindings []engine.Finding
+					var procCtx *engine.ProcessContext
 					if an := flagged[p.PID]; an != nil {
-						// The anomaly travels with the file as evidence, so
-						// rules, Defender and the AI layer weigh it too.
+						// The anomaly and runtime command line travel with the
+						// file as evidence, so rules, Defender and the AI layer
+						// can catch fileless LOLBin abuse even on signed tools.
 						ctxFindings = []engine.Finding{{Layer: "behavior", Name: "anomalous-start",
 							Score: an.Score / 2, Detail: strings.Join(an.Reasons, "; ")}}
+						procCtx = &engine.ProcessContext{PID: an.PID, Parent: an.Parent, Cmdline: an.Cmdline}
 					}
-					go a.guardScan(ctx, p.Exe, "on-execute", ctxFindings, say)
+					go a.guardScan(ctx, p.Exe, "on-execute", ctxFindings, procCtx, say)
 				}
 			}
 			if cfg.Behavior.Enabled && now.Sub(lastBurst) >= 10*time.Second {
@@ -233,10 +236,10 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 }
 
 // guardScan scans one file for the guard and reports anything found.
-func (a *App) guardScan(ctx context.Context, path, origin string, evidence []engine.Finding, say func(string, ...any)) {
+func (a *App) guardScan(ctx context.Context, path, origin string, evidence []engine.Finding, proc *engine.ProcessContext, say func(string, ...any)) {
 	cfg := a.Config()
 	res := a.Engine().ScanFile(ctx, path, engine.Options{
-		Escalate: true, Quarantine: cfg.Realtime.AutoQuarantine, Context: evidence})
+		Escalate: true, Quarantine: cfg.Realtime.AutoQuarantine, Context: evidence, Process: proc})
 	switch res.Verdict {
 	case engine.Malicious, engine.Suspicious:
 		a.logDetection(origin, res)

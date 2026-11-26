@@ -354,6 +354,12 @@ func (s *server) quarantine(r *http.Request) (any, error) {
 		return nil, err
 	}
 	switch q.Action {
+	case "quarantine":
+		if strings.TrimSpace(q.Path) == "" {
+			return nil, errors.New("path is required")
+		}
+		id, err := s.a.QuarantinePath(r.Context(), q.Path)
+		return map[string]string{"id": id}, err
 	case "restore":
 		_, err := s.a.Restore(q.ID, "", q.Allow)
 		return nil, err
@@ -411,10 +417,38 @@ func (s *server) ai(r *http.Request) (any, error) {
 		if stored == nil {
 			stored = []ai.StoredModel{}
 		}
-		return map[string]any{"mode": cfg.AI.Mode, "local": cfg.AI.Local, "cloud": cfg.AI.Cloud,
-			"cloud_key_set": secure.Secret("anthropic") != "", "vt_key_set": secure.Secret("virustotal") != "",
-			"recommended": ai.RecommendedFor(cfg.AI.Local.MaxParamsB), "models": models, "ollama": runtime,
-			"stored": stored, "download": s.dl.snapshot(), "hf_token_set": secure.Secret("huggingface") != ""}, nil
+		prov := s.a.ActiveCloudProvider()
+		sens := cfg.AI.Sensitivity
+		if sens == "" {
+			sens = "balanced"
+		}
+		thr := cfg.AI.ConfidenceThreshold
+		if thr < 0.5 || thr > 0.99 {
+			thr = 0.80
+		}
+		return map[string]any{
+			"mode":                 cfg.AI.Mode,
+			"sensitivity":          sens,
+			"confidence_threshold": thr,
+			"local":                cfg.AI.Local,
+			"cloud":                cfg.AI.Cloud,
+			"cloud_provider":       prov,
+			"cloud_providers":      ai.CloudProviders,
+			"cloud_key_set":        s.a.HasCloudKey(),
+			"cloud_keys": map[string]bool{
+				"gemini": secure.Secret("gemini") != "",
+				"claude": secure.Secret("anthropic") != "",
+				"openai": secure.Secret("openai") != "",
+			},
+			"ai_stats":     s.a.Engine().AIStats(),
+			"vt_key_set":   secure.Secret("virustotal") != "",
+			"recommended":  ai.RecommendedFor(cfg.AI.Local.MaxParamsB),
+			"models":       models,
+			"ollama":       runtime,
+			"stored":       stored,
+			"download":     s.dl.snapshot(),
+			"hf_token_set": secure.Secret("huggingface") != "",
+		}, nil
 	}
 	q, err := body(r)
 	if err != nil {
@@ -424,6 +458,14 @@ func (s *server) ai(r *http.Request) (any, error) {
 	switch q.Action {
 	case "mode":
 		return nil, s.a.SetAIMode(q.Value)
+	case "sensitivity":
+		return nil, s.a.Set("ai.sensitivity", q.Value)
+	case "cloud-provider":
+		return nil, s.a.Set("ai.cloud.provider", q.Value)
+	case "cloud-model":
+		return nil, s.a.Set("ai.cloud.model", q.Value)
+	case "cloud-endpoint":
+		return nil, s.a.Set("ai.cloud.endpoint", q.Value)
 	case "use":
 		p, err := s.a.UseLocalModel(ctx, q.Name)
 		return map[string]any{"params_b": p}, err
@@ -462,9 +504,17 @@ func (s *server) ai(r *http.Request) (any, error) {
 		if strings.TrimSpace(q.Key) == "" {
 			return nil, errors.New("paste an API key")
 		}
-		return nil, s.a.SetSecret("anthropic", q.Key)
+		prov := q.Name
+		if prov == "" {
+			prov = s.a.ActiveCloudProvider()
+		}
+		return nil, s.a.SetSecret(ai.CloudSecretName(prov), q.Key)
 	case "clear-key":
-		return nil, s.a.SetSecret("anthropic", "")
+		prov := q.Name
+		if prov == "" {
+			prov = s.a.ActiveCloudProvider()
+		}
+		return nil, s.a.SetSecret(ai.CloudSecretName(prov), "")
 	case "vt-key":
 		return nil, s.a.SetSecret("virustotal", q.Key)
 	case "test":
@@ -512,6 +562,8 @@ func (s *server) settings(r *http.Request) (any, error) {
 		return nil, s.a.Exclude(q.Value, true)
 	case "exclude-remove":
 		return nil, s.a.Exclude(q.Value, false)
+	case "allow-add":
+		return nil, s.a.Allow(q.Value, true)
 	case "allow-remove":
 		return nil, s.a.Allow(q.Value, false)
 	}

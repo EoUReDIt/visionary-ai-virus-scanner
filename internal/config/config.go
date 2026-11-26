@@ -64,15 +64,19 @@ type LocalAI struct {
 }
 
 type CloudAI struct {
+	Provider      string `json:"provider"`           // gemini | claude | openai
 	Model         string `json:"model"`
+	Endpoint      string `json:"endpoint,omitempty"` // optional custom OpenAI-compatible base URL
 	Effort        string `json:"effort,omitempty"`
 	ShareSnippets bool   `json:"share_snippets"` // send script excerpts, never whole files
 }
 
 type AI struct {
-	Mode  string  `json:"mode"` // off | local | cloud | hybrid
-	Local LocalAI `json:"local"`
-	Cloud CloudAI `json:"cloud"`
+	Mode                string  `json:"mode"`                 // off | local | cloud | hybrid
+	Sensitivity         string  `json:"sensitivity"`          // conservative | balanced | proactive
+	ConfidenceThreshold float64 `json:"confidence_threshold"` // min confidence (0.5..0.99) to convict or clear; 0 = 0.80
+	Local               LocalAI `json:"local"`
+	Cloud               CloudAI `json:"cloud"`
 }
 
 type Reputation struct {
@@ -176,12 +180,14 @@ func defaults() *Config {
 		Realtime:   Realtime{AutoQuarantine: true},
 		Scan:       Scan{MaxFileSizeMB: 64, ScanArchives: true, UseCache: true, AIBudget: 20},
 		AI: AI{
-			Mode: "off",
+			Mode:                "off",
+			Sensitivity:         "balanced",
+			ConfidenceThreshold: 0.80,
 			Local: LocalAI{
 				Provider: "ollama", Endpoint: "http://127.0.0.1:11434",
 				Model: "qwen3:1.7b", MaxParamsB: 3.0,
 			},
-			Cloud: CloudAI{Model: "claude-opus-5-5"},
+			Cloud: CloudAI{Provider: "gemini", Model: "gemini-2.5-flash"},
 		},
 		Behavior: Behavior{Enabled: true, LearnDays: 3, Threshold: 50},
 		Security: Security{RequirePasswordToDisable: false},

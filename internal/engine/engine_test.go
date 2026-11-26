@@ -157,3 +157,26 @@ func TestQuarantineCacheAllow(t *testing.T) {
 		t.Error("path traversal id accepted")
 	}
 }
+
+func TestLOLBinBehaviorNotDiscounted(t *testing.T) {
+	e, dir := setup(t)
+	ctx := context.Background()
+	p := put(t, dir, "powershell.exe", []byte("clean signed host placeholder"))
+	var seen *Report
+	e.AI = func(_ context.Context, rep *Report) (*AIVerdict, error) {
+		seen = rep
+		return &AIVerdict{Verdict: "malicious", Confidence: 0.94, Category: "lolbin", Reasons: []string{"winword spawned encoded powershell"}, Model: "test"}, nil
+	}
+	r := e.ScanFile(ctx, p, Options{
+		Escalate: true,
+		Context:  []Finding{{Layer: "behavior", Name: "anomalous-start", Score: 45, Detail: "winword started powershell"}},
+		Process:  &ProcessContext{PID: 4242, Parent: "winword", Cmdline: "powershell -w hidden -enc AAA"},
+	})
+	if r.Verdict != Malicious || seen == nil || seen.Process == nil || seen.Process.Parent != "winword" {
+		t.Fatalf("LOLBin triage failed: verdict=%s score=%d seen=%+v", r.Verdict, r.Score, seen)
+	}
+	if stats := e.AIStats(); stats.Triaged != 1 || stats.Convicted != 1 {
+		t.Fatalf("unexpected AI stats: %+v", stats)
+	}
+}
+

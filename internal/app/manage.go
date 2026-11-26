@@ -157,8 +157,8 @@ func (a *App) SetAIMode(mode string) error {
 	default:
 		return errors.New("AI mode must be off, local, cloud or hybrid")
 	}
-	if (mode == "cloud" || mode == "hybrid") && secure.Secret("anthropic") == "" {
-		return errors.New("no cloud API key yet: run `visionary ai cloud set-key` first")
+	if (mode == "cloud" || mode == "hybrid") && !a.HasCloudKey() {
+		return fmt.Errorf("no %s API key yet: run `visionary ai cloud set-key` first", a.ActiveCloudProvider())
 	}
 	return a.update(func(c *config.Config) error { c.AI.Mode = mode; return nil })
 }
@@ -252,30 +252,65 @@ func (a *App) UseGGUF(path, serverPath string) (float64, error) {
 	})
 }
 
-// SetSecret stores or clears an API key ("anthropic" or "virustotal").
+// SetSecret stores or clears an API key ("gemini", "anthropic", "openai",
+// "virustotal", or "huggingface").
 func (a *App) SetSecret(name, value string) error {
-	if err := secure.SetSecret(name, strings.TrimSpace(value)); err != nil {
+	value = strings.TrimSpace(value)
+	if err := secure.SetSecret(name, value); err != nil {
 		return err
 	}
 	return a.update(func(c *config.Config) error {
-		switch {
-		case name == "virustotal":
+		switch name {
+		case "virustotal":
 			c.Reputation.VirusTotal = value != ""
-		case name == "anthropic" && value == "":
-			if c.AI.Mode == "cloud" {
-				c.AI.Mode = "off"
-			} else if c.AI.Mode == "hybrid" {
-				c.AI.Mode = "local"
+		case "gemini", "anthropic", "openai":
+			prov := name
+			if prov == "anthropic" {
+				prov = "claude"
 			}
-		case name == "anthropic":
-			if c.AI.Mode == "off" {
-				c.AI.Mode = "cloud"
-			} else if c.AI.Mode == "local" {
-				c.AI.Mode = "hybrid"
+			if value == "" {
+				if strings.EqualFold(c.AI.Cloud.Provider, prov) || (c.AI.Cloud.Provider == "" && prov == "claude") {
+					if c.AI.Mode == "cloud" {
+						c.AI.Mode = "off"
+					} else if c.AI.Mode == "hybrid" {
+						c.AI.Mode = "local"
+					}
+				}
+			} else {
+				if c.AI.Cloud.Provider != prov {
+					c.AI.Cloud.Provider = prov
+					c.AI.Cloud.Model = ai.DefaultCloudModel(prov)
+				}
+				if c.AI.Mode == "off" {
+					c.AI.Mode = "cloud"
+				} else if c.AI.Mode == "local" {
+					c.AI.Mode = "hybrid"
+				}
 			}
 		}
 		return nil
 	})
+}
+
+// QuarantinePath moves a suspicious or malicious file into the encoded vault.
+func (a *App) QuarantinePath(ctx context.Context, path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	res := a.Engine().ScanFile(ctx, abs, engine.Options{NoCache: true})
+	if res.Verdict == engine.Failed {
+		return "", errors.New(res.Error)
+	}
+	if res.Threat == "" {
+		res.Threat = "Manual.Quarantine"
+	}
+	id, err := engine.Quarantine(abs, res)
+	if err != nil {
+		return "", err
+	}
+	a.Log("system", "warn", fmt.Sprintf("Quarantined %s as %s", abs, id), nil)
+	return id, nil
 }
 
 type AITest struct {

@@ -3,220 +3,638 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Visionary</title>
+<meta name="description" content="Visionary AI Protection — layered Windows antivirus with local sub-3B and multi-provider cloud AI threat triage.">
+<meta property="og:title" content="Visionary AI Protection">
+<meta property="og:description" content="Layered Windows antivirus combining hash, YARA, behaviour/LOLBin monitoring, Defender second opinion, local sub-3B AI, and cloud AI triage.">
+<title>Visionary AI Protection</title>
 <style>
 :root{
-  --bg:#0b0e13; --panel:#12161d; --panel2:#171c25; --line:#232a36; --text:#e6eaf0; --muted:#8b95a5;
-  --accent:#4de3a5; --accent-ink:#04130c; --warn:#f2b84b; --bad:#ff5d6c; --info:#6aa8ff;
-  --mono:ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace;
-  --sans:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-serif;
+  --bg:#0b1017; --surface:#111722; --surface-2:#171f2e; --surface-hover:#1c2638;
+  --border:#232e42; --border-strong:#32415c;
+  --text:#e8eef7; --muted:#8c98ad; --faint:#657289;
+  --accent:#10b981; --accent-hover:#0ea572; --accent-ink:#03140e; --accent-soft:rgba(16,185,129,.12);
+  --warn:#f59e0b; --warn-soft:rgba(245,158,11,.12);
+  --bad:#ef4444; --bad-soft:rgba(239,68,68,.12);
+  --info:#3b82f6; --info-soft:rgba(59,130,246,.12);
+  --shadow:0 12px 36px rgba(0,0,0,.38);
+  --mono:ui-monospace,"Cascadia Code","JetBrains Mono","SFMono-Regular",Consolas,monospace;
+  --sans:"Segoe UI Variable","Segoe UI",Inter,system-ui,-apple-system,sans-serif;
 }
-@media (prefers-color-scheme: light){
-  :root{--bg:#f4f6f9; --panel:#ffffff; --panel2:#f0f3f7; --line:#dde2ea; --text:#141a22; --muted:#5d6878;
-    --accent:#0f9d68; --accent-ink:#ffffff; --warn:#a86a00; --bad:#c9273a; --info:#2364c9;}
+:root[data-theme="light"]{
+  --bg:#f5f7fb; --surface:#ffffff; --surface-2:#f0f3f8; --surface-hover:#e7ecf4;
+  --border:#dde3ee; --border-strong:#c4cede;
+  --text:#0f172a; --muted:#526075; --faint:#7a879b;
+  --accent:#059669; --accent-hover:#047857; --accent-ink:#ffffff; --accent-soft:rgba(5,150,105,.10);
+  --warn:#b45309; --warn-soft:rgba(180,83,9,.10);
+  --bad:#dc2626; --bad-soft:rgba(220,38,38,.09);
+  --info:#2563eb; --info-soft:rgba(37,99,235,.09);
+  --shadow:0 12px 32px rgba(15,23,42,.12);
 }
 *{box-sizing:border-box}
 html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);display:flex}
-nav{width:204px;flex:none;background:var(--panel);border-right:1px solid var(--line);padding:18px 10px;display:flex;flex-direction:column;gap:2px}
-.brand{font-weight:700;letter-spacing:.14em;font-size:13px;padding:0 10px 16px;display:flex;align-items:center;gap:9px}
-.brand i{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
-.brand i.off{background:var(--bad);box-shadow:0 0 12px var(--bad)}
-nav button{all:unset;cursor:pointer;padding:8px 10px;border-radius:7px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
-nav button:hover{background:var(--panel2);color:var(--text)}
-nav button.on{background:var(--panel2);color:var(--text);box-shadow:inset 2px 0 0 var(--accent)}
-nav button:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--info);outline-offset:2px}
-nav .count{font:11px var(--mono);background:var(--bad);color:#fff;border-radius:9px;padding:0 6px}
-nav .foot{margin-top:auto;padding:10px;color:var(--muted);font-size:12px}
-main{flex:1;min-width:0;overflow:auto;padding:26px 30px 60px}
-h1{font-size:21px;margin:0 0 4px;font-weight:650}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:26px 0 10px;font-weight:600}
-p.lead{color:var(--muted);margin:0 0 18px;max-width:72ch}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-.card .k{color:var(--muted);font-size:12px}
-.card .v{font-size:19px;font-weight:600;margin-top:2px;overflow-wrap:anywhere}
-.card .s{color:var(--muted);font-size:12px;margin-top:4px}
-.hero{display:flex;gap:20px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 22px;flex-wrap:wrap}
-.shield{width:58px;height:58px;border-radius:16px;display:grid;place-items:center;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);flex:none}
-.shield.off{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
-.hero .t{font-size:19px;font-weight:650}
-.hero .d{color:var(--muted)}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.55 var(--sans);display:flex;overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+.num{font-variant-numeric:tabular-nums}
+
+/* Sidebar */
+nav{
+  width:236px;flex:none;background:var(--surface);border-right:1px solid var(--border);
+  padding:16px 12px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;
+}
+.brand{
+  display:flex;align-items:center;gap:10px;padding:4px 10px 16px;
+  border-bottom:1px solid var(--border);margin-bottom:10px;
+}
+.brand-mark{
+  width:28px;height:28px;border-radius:7px;display:grid;place-items:center;
+  background:var(--accent-soft);color:var(--accent);flex:none;
+}
+.brand-mark.off{background:var(--bad-soft);color:var(--bad)}
+.brand-name{font-weight:700;letter-spacing:.08em;font-size:13px;line-height:1.1}
+.brand-sub{font-size:11px;color:var(--muted);line-height:1.2}
+nav button{
+  all:unset;cursor:pointer;padding:8px 10px;border-radius:7px;color:var(--muted);
+  display:flex;align-items:center;gap:10px;font-weight:500;font-size:13.5px;
+  transition:background .12s,color .12s;
+}
+nav button svg{width:16px;height:16px;flex:none;opacity:.82}
+nav button:hover{background:var(--surface-2);color:var(--text)}
+nav button.on{background:var(--surface-2);color:var(--text);font-weight:600}
+nav button.on svg{color:var(--accent);opacity:1}
+nav button:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{
+  outline:2px solid var(--info);outline-offset:2px;
+}
+nav .nav-lbl{flex:1;min-width:0}
+nav .count{font:600 12px var(--mono);font-variant-numeric:tabular-nums;color:var(--bad)}
+nav .foot{
+  margin-top:auto;padding:12px 10px 4px;border-top:1px solid var(--border);
+  color:var(--muted);font-size:12px;display:flex;flex-direction:column;gap:2px;
+}
+
+/* Main shell */
+.shell{flex:1;min-width:0;display:flex;flex-direction:column;height:100%}
+header.topbar{
+  height:56px;flex:none;background:var(--surface);border-bottom:1px solid var(--border);
+  padding:0 28px;display:flex;align-items:center;gap:12px;
+}
+.top-title{font-size:15px;font-weight:650;letter-spacing:-.01em}
+.top-meta{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.top-act{margin-left:auto;display:flex;align-items:center;gap:8px}
+main{flex:1;min-width:0;overflow-y:auto;padding:24px 28px 64px}
+.wrap{max-width:1160px;margin:0 auto}
+
+h1{font-size:21px;margin:0 0 4px;font-weight:650;letter-spacing:-.015em}
+h2{font-size:11.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:24px 0 10px;font-weight:650}
+p.lead{color:var(--muted);margin:0 0 18px;max-width:74ch;font-size:13.5px}
+
+/* Cards & Grids */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.card{
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:16px 18px;
+}
+.card .k{color:var(--muted);font-size:12px;font-weight:500}
+.card .v{font-size:20px;font-weight:650;margin-top:3px;letter-spacing:-.015em;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.card .s{color:var(--muted);font-size:12px;margin-top:5px;line-height:1.45}
+
+/* Hero */
+.hero{
+  display:flex;gap:18px;align-items:center;background:var(--surface);
+  border:1px solid var(--border);border-radius:11px;padding:18px 20px;flex-wrap:wrap;
+}
+.shield{
+  width:52px;height:52px;border-radius:12px;display:grid;place-items:center;
+  background:var(--accent-soft);color:var(--accent);flex:none;
+}
+.shield.off{background:var(--bad-soft);color:var(--bad)}
+.hero .t{font-size:18px;font-weight:650;letter-spacing:-.01em}
+.hero .d{color:var(--muted);font-size:13.5px;margin-top:2px}
 .hero .act{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-button.b,select,input[type=text],input[type=password],input[type=number]{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:7px 12px}
-button.b{cursor:pointer}
-button.b:hover{border-color:var(--muted)}
+
+/* Pipeline */
+.pipeline{
+  display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;
+}
+.stage{
+  all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;gap:4px;
+  background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:11px 12px;
+  transition:border-color .12s,background .12s;
+}
+.stage:hover{border-color:var(--border-strong);background:var(--surface-2)}
+.stage-n{font:600 10.5px var(--mono);color:var(--faint);letter-spacing:.04em}
+.stage-t{font-weight:600;font-size:13px;color:var(--text)}
+.stage-s{font-size:11.5px;color:var(--muted);line-height:1.35}
+.stage-st{font:600 11px var(--mono);margin-top:auto;padding-top:4px;text-transform:uppercase;letter-spacing:.04em}
+
+/* Controls */
+button.b,select,input[type=text],input[type=password],input[type=number],input[type=search]{
+  font:inherit;font-size:13.5px;color:var(--text);background:var(--surface-2);
+  border:1px solid var(--border);border-radius:7px;padding:7px 11px;
+  transition:border-color .12s,background .12s;
+}
+button.b{cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+button.b:hover:not(:disabled){border-color:var(--border-strong);background:var(--surface-hover)}
 button.b.p{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:600}
+button.b.p:hover:not(:disabled){background:var(--accent-hover)}
 button.b.d{color:var(--bad)}
-button.b:disabled{opacity:.5;cursor:default}
-input[type=text],input[type=password]{min-width:0;flex:1}
+button.b.d:hover:not(:disabled){border-color:var(--bad);background:var(--bad-soft)}
+button.b.sm{padding:4px 9px;font-size:12.5px}
+button.b:disabled{opacity:.48;cursor:default}
+input[type=text],input[type=password],input[type=search]{min-width:0;flex:1}
+input[type=number]{width:86px;font-variant-numeric:tabular-nums}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
-label.chk{display:inline-flex;gap:6px;align-items:center;color:var(--muted);cursor:pointer}
+.row-tight{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+label.chk{display:inline-flex;gap:7px;align-items:center;color:var(--muted);cursor:pointer;font-size:13.5px}
+label.fld{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);font-weight:500}
+
 code,.cli{font:12px var(--mono)}
-.cli{display:block;color:var(--muted);margin-top:8px;overflow-wrap:anywhere}
+.cli{display:block;color:var(--faint);margin-top:10px;overflow-wrap:anywhere}
 .cli::before{content:"$ ";color:var(--accent)}
+
+/* Tables */
 table{width:100%;border-collapse:collapse}
-th{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);text-align:left;font-weight:600;padding:6px 10px;border-bottom:1px solid var(--line)}
-td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
+th{
+  font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+  text-align:left;font-weight:650;padding:9px 12px;border-bottom:1px solid var(--border);
+  background:var(--surface);white-space:nowrap;
+}
+td{
+  padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;
+  overflow-wrap:anywhere;font-size:13.5px;
+}
 tr:last-child td{border-bottom:0}
-.tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow-x:auto}
-.empty{padding:22px;color:var(--muted);text-align:center}
-.tag{font:11px var(--mono);border-radius:5px;padding:1px 7px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
-.tag.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent)}
-.tag.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
-.tag.ok{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
-.path{font:12px var(--mono)}
+tbody tr:hover td{background:var(--surface-2)}
+.tablewrap{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow-x:auto}
+.empty{padding:26px;color:var(--muted);text-align:center;font-size:13.5px}
+
+/* Semantic text labels (zero-pill discipline) */
+.st{font:600 11.5px var(--mono);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.t-ok{color:var(--accent)}
+.t-warn{color:var(--warn)}
+.t-bad{color:var(--bad)}
+.t-info{color:var(--info)}
+.t-muted{color:var(--muted)}
+.path{font:12px var(--mono);color:var(--text)}
 .muted{color:var(--muted)}
-.find{font-size:12px;color:var(--muted);margin-top:3px}
-.bar{height:3px;background:var(--line);border-radius:2px;overflow:hidden;margin:10px 0}
-.bar i{display:block;height:100%;width:35%;background:var(--accent);animation:slide 1.2s infinite ease-in-out}
-@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+.meta-line{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* Findings & AI verdict breakdown */
+.find{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.45}
+.find-layer{font:600 11px var(--mono);text-transform:uppercase;color:var(--faint);margin-right:6px}
+.ai-box{
+  margin-top:8px;padding:10px 12px;border-radius:8px;
+  background:var(--surface-2);border:1px solid var(--border);font-size:12.5px;
+}
+.ai-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;font-variant-numeric:tabular-nums}
+.ai-summary{color:var(--text);margin-bottom:4px}
+.ai-reasons{margin:4px 0 0;padding-left:16px;color:var(--muted)}
+.ai-reasons li{margin:2px 0}
+
+/* Telemetry bar */
+.telemetry{
+  display:flex;gap:18px;flex-wrap:wrap;padding-top:12px;margin-top:12px;
+  border-top:1px solid var(--border);font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;
+}
+.telemetry b{color:var(--text);font-weight:650}
+
+/* Progress bar */
+.bar{height:3px;background:var(--border);border-radius:2px;overflow:hidden;margin:10px 0}
+.bar i{display:block;height:100%;width:36%;background:var(--accent);animation:slide 1.2s infinite ease-in-out}
+.bar.det i{animation:none;transition:width .25s ease}
+@keyframes slide{0%{margin-left:-36%}100%{margin-left:100%}}
 @media (prefers-reduced-motion: reduce){.bar i{animation:none;width:100%}}
-#toast{position:fixed;right:20px;bottom:20px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);padding:10px 14px;border-radius:8px;max-width:420px;display:none;box-shadow:0 8px 30px #0006}
-#toast.err{border-left-color:var(--bad)}
+
+/* Notes & Explain */
+.note{
+  background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
+  padding:10px 12px;color:var(--muted);font-size:13px;margin:10px 0;
+}
+pre.explain{
+  white-space:pre-wrap;font:13.5px/1.6 var(--sans);margin:10px 0 0;
+  padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
+}
+
+/* Filter bar */
+.filterbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+
+/* Toast (clean hairline, no thick left border) */
+#toast{
+  position:fixed;right:20px;bottom:20px;z-index:90;
+  background:var(--surface);border:1px solid var(--border-strong);
+  padding:10px 14px;border-radius:9px;max-width:420px;display:none;
+  box-shadow:var(--shadow);font-size:13px;color:var(--text);
+}
+#toast.err{border-color:var(--bad);color:var(--bad)}
+
+/* Accessible Confirmation Modal */
+.modal-bg{
+  position:fixed;inset:0;z-index:100;background:rgba(4,8,15,.65);
+  display:none;place-items:center;padding:16px;
+}
+.modal-bg.open{display:grid}
+.modal{
+  width:100%;max-width:440px;background:var(--surface);border:1px solid var(--border-strong);
+  border-radius:12px;padding:20px 22px;box-shadow:var(--shadow);
+}
+.modal h3{margin:0 0 8px;font-size:16px;font-weight:650}
+.modal p{margin:0 0 18px;color:var(--muted);font-size:13.5px;white-space:pre-line;overflow-wrap:anywhere}
+.modal-act{display:flex;justify-content:flex-end;gap:8px}
+
 section{display:none}
 section.on{display:block}
-.note{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;color:var(--muted);font-size:13px;margin:10px 0}
-pre.explain{white-space:pre-wrap;font:13px/1.55 var(--sans);margin:0}
-@media (max-width:760px){body{flex-direction:column}nav{width:auto;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px}
-  .brand,nav .foot{display:none}nav button{white-space:nowrap}main{padding:16px}}
+
+@media (max-width:1060px){
+  .pipeline{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media (max-width:780px){
+  body{flex-direction:column;overflow:auto}
+  nav{width:auto;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--border);padding:8px}
+  .brand,nav .foot{display:none}
+  nav button{white-space:nowrap}
+  .shell{height:auto}
+  header.topbar{padding:0 16px}
+  main{padding:16px 16px 48px}
+  .pipeline{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 </style>
 </head>
 <body>
-<nav id="nav" aria-label="Sections">
-  <div class="brand"><i id="dot"></i>VISIONARY</div>
+<nav id="nav" aria-label="Primary navigation">
+  <div class="brand">
+    <div class="brand-mark" id="brandMark" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+    </div>
+    <div>
+      <div class="brand-name">VISIONARY</div>
+      <div class="brand-sub" id="brandSub">AI Protection</div>
+    </div>
+  </div>
 </nav>
-<main>
-<section id="overview">
-  <h1>Overview</h1>
-  <p class="lead">Everything here is also a command. The line under each control shows the one that does the same thing.</p>
-  <div class="hero">
-    <div class="shield" id="shield"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path id="tick" d="M8.5 12l2.5 2.5 4.5-5"/></svg></div>
-    <div><div class="t" id="protT"></div><div class="d" id="protD"></div></div>
-    <div class="act" id="protAct"></div>
-  </div>
-  <span class="cli" id="protCli"></span>
-  <h2>At a glance</h2>
-  <div class="grid" id="cards"></div>
-  <h2>Windows Security</h2>
-  <div class="card" id="win"></div>
-</section>
 
-<section id="scan">
-  <h1>Scan</h1>
-  <p class="lead">Quick scan covers running programs, autoruns, startup, temp and download folders. Targeted scan checks exactly what you point it at. "Second opinions" sends gray-zone files to Microsoft Defender, reputation and AI.</p>
-  <div class="card">
-    <div class="row">
-      <button class="b p" id="bQuick">Quick scan</button>
-      <input type="text" id="tPath" placeholder="C:\path\to\file-or-folder" aria-label="Path to scan">
-      <button class="b" id="bTarget">Scan path</button>
+<div class="shell">
+  <header class="topbar">
+    <div class="top-title" id="topTitle">Overview</div>
+    <div class="top-meta" id="topMeta"></div>
+    <div class="top-act">
+      <button class="b p sm" id="topQuick">Quick scan</button>
+      <button class="b sm" id="bTheme" title="Switch color theme" aria-label="Switch color theme">Theme</button>
     </div>
-    <div class="row">
-      <label class="chk"><input type="checkbox" id="oDeep" checked> Second opinions for suspicious files</label>
-      <label class="chk"><input type="checkbox" id="oQuar"> Quarantine what is malicious</label>
+  </header>
+
+  <main>
+    <div class="wrap">
+      <!-- OVERVIEW -->
+      <section id="overview">
+        <div class="hero">
+          <div class="shield" id="shield">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path id="tick" d="M8.5 12l2.5 2.5 4.5-5"/></svg>
+          </div>
+          <div>
+            <div class="t" id="protT">Loading protection status…</div>
+            <div class="d" id="protD"></div>
+          </div>
+          <div class="act" id="protAct"></div>
+        </div>
+        <span class="cli" id="protCli">visionary status</span>
+
+        <h2>AI Protection Pipeline</h2>
+        <div class="pipeline" id="pipeline"></div>
+
+        <h2>At a glance</h2>
+        <div class="grid" id="cards"></div>
+
+        <h2>Windows Security co-existence</h2>
+        <div class="card" id="win"></div>
+      </section>
+
+      <!-- SCAN -->
+      <section id="scan">
+        <h1>Scan</h1>
+        <p class="lead">Quick scan inspects running programs, autoruns, startup folders, Temp and Downloads. Targeted scan checks any file or folder. Second opinions escalate gray-zone files and suspicious LOLBin activity to Defender, VirusTotal, local AI and cloud AI.</p>
+        <div class="card">
+          <div class="row">
+            <button class="b p" id="bQuick">Quick scan</button>
+            <input type="text" id="tPath" placeholder="C:\path\to\file-or-folder" aria-label="Path to scan">
+            <button class="b" id="bTarget">Scan path</button>
+          </div>
+          <div class="row">
+            <label class="chk"><input type="checkbox" id="oDeep" checked> Second opinions &amp; AI triage for suspicious files</label>
+            <label class="chk"><input type="checkbox" id="oQuar"> Quarantine confirmed malicious files</label>
+          </div>
+          <span class="cli" id="scanCli">visionary scan quick --deep</span>
+        </div>
+        <div id="jobBox"></div>
+        <h2>Boot-time &amp; Offline scan</h2>
+        <div class="card">
+          <div class="row">
+            <div style="flex:1">
+              <b id="bootT"></b>
+              <div class="muted">Scans drivers, services, autoruns and scheduled tasks at the next startup as SYSTEM before anyone logs in. Use Microsoft Defender Offline to scan outside Windows for rootkits.</div>
+            </div>
+            <button class="b" id="bBoot"></button>
+            <button class="b" id="bOffline">Defender Offline scan…</button>
+          </div>
+          <span class="cli">visionary preboot schedule --reboot &nbsp;·&nbsp; visionary windows offline-scan</span>
+        </div>
+      </section>
+
+      <!-- THREATS -->
+      <section id="threats">
+        <h1>Threats &amp; AI Analyst</h1>
+        <p class="lead">Quarantined files are XOR-encoded and stripped of execute permissions so they cannot run. Use the AI Analyst below to get a plain-English risk briefing on any file or detection.</p>
+
+        <div class="filterbar">
+          <input type="search" id="tFilter" placeholder="Filter quarantine and detections by path, threat or AI verdict…" aria-label="Filter threats">
+        </div>
+
+        <h2>Quarantine</h2>
+        <div class="tablewrap" id="qTable"></div>
+        <span class="cli">visionary quarantine list &nbsp;·&nbsp; visionary quarantine restore &lt;id&gt; --allow</span>
+
+        <h2>Recent detections</h2>
+        <div class="tablewrap" id="dTable"></div>
+
+        <h2>AI Threat Analyst — Explain a file</h2>
+        <div class="card">
+          <div class="row">
+            <input type="text" id="xPath" placeholder="Path of a file to scan and explain with AI" aria-label="File to explain">
+            <button class="b p" id="bExplain">Analyze with AI</button>
+          </div>
+          <span class="cli">visionary ai explain &lt;file&gt;</span>
+          <div id="xOut"></div>
+        </div>
+      </section>
+
+      <!-- DEFINITIONS -->
+      <section id="definitions">
+        <h1>Definitions</h1>
+        <p class="lead">Import hash lists (plain, CSV, ClamAV .hdb/.hsb/.cvd), YARA rules or certificate blocklists, or subscribe to channels polled on a schedule.</p>
+        <div class="grid" id="defCards"></div>
+        <h2>Import a file</h2>
+        <div class="card">
+          <div class="row">
+            <input type="text" id="iPath" placeholder="C:\defs\rules.yar" aria-label="Definitions file path">
+            <select id="iKind" aria-label="Kind">
+              <option value="auto">detect type</option>
+              <option>hashes</option>
+              <option>yara</option>
+              <option>certs</option>
+              <option>cvd</option>
+            </select>
+            <button class="b p" id="bImport">Import</button>
+          </div>
+          <span class="cli">visionary defs import &lt;file&gt;</span>
+        </div>
+        <h2>Sources</h2>
+        <div class="tablewrap" id="sTable"></div>
+        <h2>Channels</h2>
+        <div class="tablewrap" id="cTable"></div>
+        <div class="card" style="margin-top:12px">
+          <div class="row">
+            <select id="cPreset" aria-label="Preset"></select>
+            <input type="text" id="cName" placeholder="name" style="flex:.4" aria-label="Channel name">
+            <input type="text" id="cURL" placeholder="https://example.com/feed.txt" aria-label="Channel URL">
+            <button class="b p" id="bChan">Subscribe</button>
+            <button class="b" id="bChanUp">Update all now</button>
+          </div>
+          <span class="cli">visionary defs channel add &lt;name&gt; &lt;url&gt; &nbsp;·&nbsp; visionary defs channel update</span>
+        </div>
+      </section>
+
+      <!-- AI HUB -->
+      <section id="ai">
+        <h1>AI Protection Engine</h1>
+        <p class="lead">Small local models (under 3B parameters) inspect suspicious files and LOLBin process anomalies on this PC. Cloud models (Google Gemini, Anthropic Claude, or OpenAI-compatible) step in when local AI is uncertain or in cloud mode. Models receive structured file telemetry and findings — never the raw executable.</p>
+
+        <div class="card">
+          <div class="row">
+            <label class="fld">Mode
+              <select id="aMode" aria-label="AI mode">
+                <option value="off">Off</option>
+                <option value="local">Local only (&lt;3B)</option>
+                <option value="cloud">Cloud only</option>
+                <option value="hybrid">Hybrid (local first, cloud fallback)</option>
+              </select>
+            </label>
+            <label class="fld">Sensitivity
+              <select id="aSens" aria-label="AI sensitivity">
+                <option value="conservative">Conservative — high-score gray zone</option>
+                <option value="balanced">Balanced — gray zone &amp; LOLBin anomalies</option>
+                <option value="proactive">Proactive — also unsigned risky paths</option>
+              </select>
+            </label>
+            <label class="fld">Conviction threshold
+              <div class="row-tight">
+                <input type="number" id="aThr" min="0.50" max="0.99" step="0.05" aria-label="AI confidence threshold">
+                <button class="b" id="bThr">Apply</button>
+              </div>
+            </label>
+            <div style="margin-left:auto;align-self:flex-end">
+              <button class="b p" id="bTest">Test active providers</button>
+            </div>
+          </div>
+          <div class="telemetry" id="aStats"></div>
+          <span class="cli" id="aCli">visionary ai mode hybrid &nbsp;·&nbsp; visionary ai sensitivity balanced</span>
+          <div id="aTest"></div>
+        </div>
+
+        <h2>Cloud AI Provider</h2>
+        <div class="card">
+          <div id="aCloud"></div>
+          <div class="row" style="margin-top:12px">
+            <label class="fld">Provider
+              <select id="cProv" aria-label="Cloud AI provider"></select>
+            </label>
+            <label class="fld" style="flex:1;min-width:210px">Model
+              <select id="cModSel" aria-label="Recommended cloud model"></select>
+            </label>
+            <label class="fld" style="flex:1;min-width:190px">Custom model ID
+              <div class="row-tight">
+                <input type="text" id="cModCustom" placeholder="e.g. gemini-2.5-flash" aria-label="Custom cloud model ID">
+                <button class="b" id="bCMod">Save</button>
+              </div>
+            </label>
+          </div>
+          <div class="row" id="cEndpointRow" hidden>
+            <input type="text" id="cEndpoint" placeholder="https://api.openai.com/v1 (or OpenRouter / Groq / vLLM endpoint)" aria-label="Custom OpenAI-compatible endpoint">
+            <button class="b" id="bCEndpoint">Save endpoint</button>
+          </div>
+          <div class="row">
+            <input type="password" id="kCloud" placeholder="Paste API key (encrypted at rest)" autocomplete="off" aria-label="Cloud API key">
+            <button class="b p" id="bKey">Save key</button>
+            <button class="b d" id="bKeyClr">Remove key</button>
+          </div>
+          <div class="row">
+            <label class="chk"><input type="checkbox" id="aShare"> Include short script excerpts in cloud reports (off: metadata, findings and process lineage only)</label>
+          </div>
+          <span class="cli" id="cCli">visionary ai cloud provider gemini &nbsp;·&nbsp; visionary ai cloud set-key</span>
+        </div>
+
+        <h2>Local AI (&lt;3B on-device)</h2>
+        <div class="card">
+          <div id="aLocal"></div>
+          <div class="row">
+            <label class="chk"><input type="checkbox" id="aCpuOnly"> CPU-only local inference (keeps GPU VRAM free for games and creative apps)</label>
+          </div>
+          <div class="tablewrap" id="mTable" style="margin:10px 0"></div>
+          <div class="row">
+            <select id="mRec" aria-label="Recommended local model"></select>
+            <button class="b p" id="bPull">Download &amp; use</button>
+          </div>
+          <div class="row">
+            <input type="text" id="gPath" placeholder="C:\models\model.gguf (served by llama-server)" aria-label="GGUF file path">
+            <button class="b" id="bGguf">Use GGUF file</button>
+          </div>
+          <span class="cli">visionary ai local pull qwen3:1.7b &nbsp;·&nbsp; visionary ai local gguf &lt;file&gt;</span>
+        </div>
+
+        <h2>GGUF Model Store</h2>
+        <div class="card">
+          <p class="muted" style="margin-top:0">GGUF models run through llama.cpp's <code>llama-server</code>. Download from Hugging Face or import your own file. Every model is verified by SHA-256 and its real parameter count is checked against the 3B cap.</p>
+          <div class="tablewrap" id="gTable" style="margin:10px 0"></div>
+          <div class="row">
+            <input type="text" id="hQ" placeholder="Search Hugging Face, e.g. qwen3 1.7b" aria-label="Search Hugging Face">
+            <button class="b" id="bHFSearch">Search</button>
+          </div>
+          <div id="hRes"></div>
+          <div class="row">
+            <input type="text" id="hRef" placeholder="owner/repo or owner/repo:Q4_K_M" aria-label="Hugging Face repository">
+            <button class="b p" id="bHFGet">Download &amp; use</button>
+            <button class="b d" id="bHFCancel" hidden>Cancel</button>
+          </div>
+          <div id="hProg" class="meta-line"></div>
+          <div class="row">
+            <input type="text" id="iGguf" placeholder="C:\models\my-model.gguf (copied into store)" aria-label="Own GGUF file">
+            <button class="b" id="bImpGguf">Import my model</button>
+          </div>
+          <div class="row">
+            <input type="password" id="kHF" placeholder="Hugging Face read token (only for gated models)" autocomplete="off" aria-label="Hugging Face token">
+            <button class="b" id="bHFTok">Save token</button>
+          </div>
+          <span class="cli">visionary ai local hf search &lt;text&gt; &nbsp;·&nbsp; visionary ai local hf get &lt;repo&gt; &nbsp;·&nbsp; visionary ai local models</span>
+        </div>
+
+        <h2>Hash Reputation (VirusTotal)</h2>
+        <div class="card">
+          <div id="aVT"></div>
+          <div class="row">
+            <input type="password" id="kVT" placeholder="VirusTotal API key" autocomplete="off" aria-label="VirusTotal API key">
+            <button class="b" id="bVT">Save key</button>
+          </div>
+          <div class="muted">Only SHA-256 digests are queried. Files are never uploaded.</div>
+          <span class="cli">visionary reputation set-key</span>
+        </div>
+      </section>
+
+      <!-- BEHAVIOUR -->
+      <section id="behaviour">
+        <h1>Behaviour &amp; LOLBin Guard</h1>
+        <p class="lead">Visionary learns which programs run here and who launches whom, then flags departures: unsigned apps launching from Temp, Office or chat apps spawning PowerShell/mshta/certutil, or rapid file-change bursts. Anomalies escalate directly into AI triage with full command-line lineage.</p>
+        <div class="grid" id="bCards"></div>
+        <div class="row" style="margin-top:12px">
+          <button class="b" id="bLearn">Learn for 3 days</button>
+          <button class="b" id="bLearnStop">Stop learning</button>
+          <button class="b d" id="bBehReset">Forget baseline</button>
+        </div>
+        <span class="cli">visionary behavior learn --days 3 &nbsp;·&nbsp; visionary behavior status</span>
+        <h2>Recorded anomalies</h2>
+        <div class="filterbar">
+          <input type="search" id="bFilter" placeholder="Filter anomalies by executable, parent process or command line…" aria-label="Filter anomalies">
+        </div>
+        <div class="tablewrap" id="anTable"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="settings">
+        <h1>Settings</h1>
+        <h2>Profile &amp; Game mode</h2>
+        <div class="card">
+          <div class="row">
+            <label class="fld">Performance profile
+              <select id="sProfile" aria-label="Profile">
+                <option value="balanced">Balanced — full layered protection</option>
+                <option value="gamer">Gamer — stays out of the way of games and launchers</option>
+                <option value="dev">Developer — ignores build churn, inspects dependencies</option>
+                <option value="lite">Lite — minimal CPU/RAM footprint</option>
+              </select>
+            </label>
+            <label class="fld">Game mode
+              <select id="sGame" aria-label="Game mode">
+                <option value="auto">Automatic (full-screen apps)</option>
+                <option value="on">Always on</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+          </div>
+          <div class="muted">In game mode scans drop to background priority while AI, reputation and channel updates pause. Hash, rule and heuristic protection remain active.</div>
+          <span class="cli">visionary profile gamer &nbsp;·&nbsp; visionary gamemode auto</span>
+        </div>
+
+        <h2>Protection rules</h2>
+        <div class="card" id="sToggles"></div>
+
+        <h2>Exclusions &amp; Allowlist</h2>
+        <div class="card">
+          <div id="sExcl"></div>
+          <div class="row">
+            <input type="text" id="eNew" placeholder="folder fragment (\projects\cache\) or file glob (*.iso)" aria-label="New exclusion">
+            <button class="b" id="bExcl">Add exclusion</button>
+          </div>
+          <span class="cli">visionary exclude add &lt;pattern&gt; &nbsp;·&nbsp; visionary allow add &lt;path-or-sha256&gt;</span>
+        </div>
+
+        <h2>Reset</h2>
+        <div class="card">
+          <div class="muted">Restores default settings and clears cached scan results. Requires the computer password for <b id="sUser"></b>. Definitions and quarantine are preserved.</div>
+          <div class="row">
+            <input type="password" id="rPw" placeholder="Computer password" autocomplete="current-password" aria-label="Computer password">
+            <label class="chk"><input type="checkbox" id="rAll"> Also remove API keys, behaviour baseline and activity log</label>
+            <button class="b d" id="bReset">Reset settings</button>
+          </div>
+          <span class="cli">visionary settings reset [--all]</span>
+        </div>
+      </section>
+
+      <!-- ACTIVITY -->
+      <section id="activity">
+        <h1>Activity</h1>
+        <p class="lead">Shared audit log written by scans, real-time guard, AI triage and every configuration change.</p>
+        <div class="filterbar">
+          <select id="eType" aria-label="Filter by event type">
+            <option value="">All event types</option>
+            <option value="detection">Detections</option>
+            <option value="anomaly">Behaviour anomalies</option>
+            <option value="scan">Scans</option>
+            <option value="protection">Protection</option>
+            <option value="definitions">Definitions</option>
+            <option value="system">System</option>
+          </select>
+          <input type="search" id="eSearch" placeholder="Search events…" aria-label="Search events">
+        </div>
+        <div class="tablewrap" id="eTable"></div>
+        <span class="cli">visionary events -n 50</span>
+      </section>
     </div>
-    <span class="cli" id="scanCli">visionary scan quick --deep</span>
+  </main>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<div class="modal-bg" id="modalBg" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal">
+    <h3 id="modalTitle">Confirm action</h3>
+    <p id="modalMsg"></p>
+    <div class="modal-act">
+      <button class="b" id="modalCancel">Cancel</button>
+      <button class="b p" id="modalOk">Confirm</button>
+    </div>
   </div>
-  <div id="jobBox"></div>
-  <h2>Boot-time scan</h2>
-  <div class="card">
-    <div class="row"><div style="flex:1"><b id="bootT"></b><div class="muted">Scans drivers, services, autoruns and scheduled tasks at the next startup, as SYSTEM, before anyone logs in. For a scan from outside Windows (rootkits), use Microsoft Defender Offline.</div></div>
-    <button class="b" id="bBoot"></button><button class="b" id="bOffline">Defender Offline scan…</button></div>
-    <span class="cli">visionary preboot schedule --reboot &nbsp;·&nbsp; visionary windows offline-scan</span>
-  </div>
-</section>
+</div>
 
-<section id="threats">
-  <h1>Threats</h1>
-  <p class="lead">Quarantined files are stored encoded so they cannot run. Restore only what you are sure about.</p>
-  <h2>Quarantine</h2><div class="tablewrap" id="qTable"></div>
-  <span class="cli">visionary quarantine list &nbsp;·&nbsp; visionary quarantine restore &lt;id&gt; --allow</span>
-  <h2>Recent detections</h2><div class="tablewrap" id="dTable"></div>
-  <h2>Explain a file</h2>
-  <div class="card"><div class="row"><input type="text" id="xPath" placeholder="Path of a file to scan and explain" aria-label="File to explain"><button class="b" id="bExplain">Explain</button></div>
-  <span class="cli">visionary ai explain &lt;file&gt;</span><div id="xOut"></div></div>
-</section>
-
-<section id="definitions">
-  <h1>Definitions</h1>
-  <p class="lead">Import hash lists (plain, CSV, ClamAV .hdb/.hsb/.cvd), YARA rules or certificate blocklists, or subscribe to a channel that is polled on a schedule.</p>
-  <div class="grid" id="defCards"></div>
-  <h2>Import a file</h2>
-  <div class="card"><div class="row"><input type="text" id="iPath" placeholder="C:\defs\rules.yar" aria-label="Definitions file path">
-    <select id="iKind" aria-label="Kind"><option value="auto">detect type</option><option>hashes</option><option>yara</option><option>certs</option><option>cvd</option></select>
-    <button class="b p" id="bImport">Import</button></div><span class="cli">visionary defs import &lt;file&gt;</span></div>
-  <h2>Sources</h2><div class="tablewrap" id="sTable"></div>
-  <h2>Channels</h2><div class="tablewrap" id="cTable"></div>
-  <div class="card" style="margin-top:12px"><div class="row"><select id="cPreset" aria-label="Preset"></select>
-    <input type="text" id="cName" placeholder="name" style="flex:.4" aria-label="Channel name"><input type="text" id="cURL" placeholder="https://example.com/feed.txt" aria-label="Channel URL">
-    <button class="b p" id="bChan">Subscribe</button><button class="b" id="bChanUp">Update all now</button></div>
-    <span class="cli">visionary defs channel add &lt;name&gt; &lt;url&gt; &nbsp;·&nbsp; visionary defs channel update</span></div>
-</section>
-
-<section id="ai">
-  <h1>AI</h1>
-  <p class="lead">A small local model (under 3B parameters) reviews suspicious files on this PC. A cloud model, reached with your own API key, is asked only when the local one is unsure. Models receive a description of the file, never the file.</p>
-  <div class="card"><div class="row"><b>Mode</b>
-    <select id="aMode" aria-label="AI mode"><option value="off">Off</option><option value="local">Local only</option><option value="cloud">Cloud only</option><option value="hybrid">Hybrid (local first)</option></select>
-    <button class="b" id="bTest">Test providers</button></div><span class="cli" id="aCli">visionary ai mode hybrid</span><div id="aTest"></div></div>
-  <h2>Local model</h2>
-  <div class="card"><div id="aLocal"></div><div class="tablewrap" id="mTable" style="margin:10px 0"></div>
-    <div class="row"><select id="mRec" aria-label="Recommended model"></select><button class="b p" id="bPull">Download &amp; use</button></div>
-    <div class="row"><input type="text" id="gPath" placeholder="C:\models\model.gguf (served by llama-server)" aria-label="GGUF path"><button class="b" id="bGguf">Use GGUF file</button></div>
-    <span class="cli">visionary ai local pull qwen3:1.7b &nbsp;·&nbsp; visionary ai local gguf &lt;file&gt;</span></div>
-  <h2>Model store</h2>
-  <div class="card"><p class="muted" style="margin-top:0">GGUF models run through llama.cpp's <code>llama-server</code>. Download from Hugging Face or bring your own file. Every file is checked: SHA-256 against the hub, and its real parameter count against the limit.</p>
-    <div class="tablewrap" id="gTable" style="margin:10px 0"></div>
-    <div class="row"><input type="text" id="hQ" placeholder="Search Hugging Face, e.g. qwen3 1.7b" aria-label="Search Hugging Face"><button class="b" id="bHFSearch">Search</button></div>
-    <div id="hRes"></div>
-    <div class="row"><input type="text" id="hRef" placeholder="owner/repo or owner/repo:Q4_K_M" aria-label="Hugging Face repository"><button class="b p" id="bHFGet">Download &amp; use</button><button class="b d" id="bHFCancel" hidden>Cancel</button></div>
-    <div id="hProg" class="muted"></div>
-    <div class="row"><input type="text" id="iGguf" placeholder="C:\models\my-model.gguf (copied into the store)" aria-label="Own GGUF file"><button class="b" id="bImpGguf">Import my model</button></div>
-    <div class="row"><input type="password" id="kHF" placeholder="Hugging Face read token (only for gated models)" autocomplete="off" aria-label="Hugging Face token"><button class="b" id="bHFTok">Save token</button></div>
-    <span class="cli">visionary ai local hf search &lt;text&gt; &nbsp;·&nbsp; visionary ai local hf get &lt;repo&gt; &nbsp;·&nbsp; visionary ai local import &lt;file&gt; &nbsp;·&nbsp; visionary ai local models</span></div>
-  <h2>Cloud model</h2>
-  <div class="card"><div id="aCloud"></div>
-    <div class="row"><input type="password" id="kAnth" placeholder="Anthropic API key" autocomplete="off" aria-label="Anthropic API key"><button class="b p" id="bKey">Save key</button><button class="b d" id="bKeyClr">Remove</button></div>
-    <label class="chk"><input type="checkbox" id="aShare"> Include short script excerpts in cloud reports (off: metadata and findings only)</label>
-    <span class="cli">visionary ai cloud set-key</span></div>
-  <h2>Reputation</h2>
-  <div class="card"><div id="aVT"></div><div class="row"><input type="password" id="kVT" placeholder="VirusTotal API key" autocomplete="off" aria-label="VirusTotal API key"><button class="b" id="bVT">Save key</button></div>
-    <div class="muted">Only SHA-256 hashes are looked up. Files are never uploaded.</div><span class="cli">visionary reputation set-key</span></div>
-</section>
-
-<section id="behaviour">
-  <h1>Behaviour</h1>
-  <p class="lead">Visionary learns which programs run here and who starts whom, then flags departures: a new program running from Temp, a chat app spawning PowerShell, a burst of file changes. An anomaly sends the program through every scan layer.</p>
-  <div class="grid" id="bCards"></div>
-  <div class="row" style="margin-top:12px"><button class="b" id="bLearn">Learn for 3 days</button><button class="b" id="bLearnStop">Stop learning</button><button class="b d" id="bBehReset">Forget baseline</button></div>
-  <span class="cli">visionary behavior learn --days 3 &nbsp;·&nbsp; visionary behavior status</span>
-  <h2>Anomalies</h2><div class="tablewrap" id="anTable"></div>
-</section>
-
-<section id="settings">
-  <h1>Settings</h1>
-  <h2>Profile</h2>
-  <div class="card"><div class="row"><select id="sProfile" aria-label="Profile"><option value="balanced">Balanced</option><option value="gamer">Gamer — stays out of the way of games and launchers</option><option value="dev">Developer — ignores build churn, keeps dependencies in</option></select>
-    <b style="margin-left:14px">Game mode</b><select id="sGame" aria-label="Game mode"><option value="auto">Automatic (full-screen apps)</option><option value="on">Always on</option><option value="off">Off</option></select></div>
-    <div class="muted">In game mode scans drop to background priority, and AI, reputation and channel updates wait. Hash, rule and heuristic protection stays on.</div>
-    <span class="cli">visionary profile gamer &nbsp;·&nbsp; visionary gamemode auto</span></div>
-  <h2>Protection</h2>
-  <div class="card" id="sToggles"></div>
-  <h2>Exclusions</h2>
-  <div class="card"><div id="sExcl"></div><div class="row"><input type="text" id="eNew" placeholder="folder fragment (\projects\cache\) or file glob (*.iso)" aria-label="New exclusion"><button class="b" id="bExcl">Add</button></div><span class="cli">visionary exclude add &lt;pattern&gt;</span></div>
-  <h2>Reset</h2>
-  <div class="card"><div class="muted">Restores default settings and clears cached scan results. Requires the computer password for <b id="sUser"></b>. Definitions and quarantine are kept.</div>
-    <div class="row"><input type="password" id="rPw" placeholder="Computer password" autocomplete="current-password" aria-label="Computer password">
-    <label class="chk"><input type="checkbox" id="rAll"> Also remove API keys, behaviour baseline and activity log</label><button class="b d" id="bReset">Reset settings</button></div>
-    <span class="cli">visionary settings reset [--all]</span></div>
-</section>
-
-<section id="activity">
-  <h1>Activity</h1><p class="lead">The shared log written by scans, the real-time guard and every settings change.</p>
-  <div class="tablewrap" id="eTable"></div><span class="cli">visionary events -n 50</span>
-</section>
-</main>
-<div id="toast" role="status"></div>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -224,8 +642,23 @@ let token = (location.hash.match(/t=([0-9a-f]+)/) || [])[1];
 try { if (token) sessionStorage.setItem("vt", token); else token = sessionStorage.getItem("vt"); } catch (e) {}
 if (location.hash) history.replaceState(null, "", location.pathname);
 
-// el builds DOM nodes; text always goes in as text, so file names and log
-// lines (which an attacker can choose) are never parsed as HTML.
+/* Theme initialization */
+function applyTheme(t) {
+  document.documentElement.setAttribute("data-theme", t);
+  $("bTheme").textContent = t === "light" ? "Dark theme" : "Light theme";
+  try { localStorage.setItem("v_theme", t); } catch (e) {}
+}
+(function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem("v_theme"); } catch (e) {}
+  if (saved !== "light" && saved !== "dark") {
+    saved = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  }
+  applyTheme(saved);
+})();
+$("bTheme").onclick = () => applyTheme(document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light");
+
+/* Safe DOM builder — attacker-controlled paths and command lines are always inserted as text nodes */
 function el(tag, attrs, ...kids) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -236,43 +669,182 @@ function el(tag, attrs, ...kids) {
   return n;
 }
 function fill(node, ...kids) { node.replaceChildren(...kids.flat().filter(k => k != null && k !== false)); }
-function toast(msg, err) { const t = $("toast"); t.textContent = msg; t.className = err ? "err" : ""; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", err ? 7000 : 3500); }
+
+/* Inline SVG icon helper (hardcoded static paths only) */
+function icon(pathD) {
+  const ns = "http://www.w3.org/2000/svg";
+  const s = document.createElementNS(ns, "svg");
+  s.setAttribute("viewBox", "0 0 24 24");
+  s.setAttribute("fill", "none");
+  s.setAttribute("stroke", "currentColor");
+  s.setAttribute("stroke-width", "1.9");
+  s.setAttribute("stroke-linecap", "round");
+  s.setAttribute("stroke-linejoin", "round");
+  s.setAttribute("aria-hidden", "true");
+  for (const d of (Array.isArray(pathD) ? pathD : [pathD])) {
+    const p = document.createElementNS(ns, "path");
+    p.setAttribute("d", d);
+    s.appendChild(p);
+  }
+  return s;
+}
+
+function toast(msg, err) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = err ? "err" : "";
+  t.style.display = "block";
+  clearTimeout(toast.h);
+  toast.h = setTimeout(() => { t.style.display = "none"; }, err ? 6500 : 3500);
+}
+
+/* Accessible in-page confirmation modal (replaces window.confirm) */
+let modalResolve = null;
+function askConfirm(title, message, okLabel, danger) {
+  $("modalTitle").textContent = title;
+  $("modalMsg").textContent = message;
+  const ok = $("modalOk");
+  ok.textContent = okLabel || "Confirm";
+  ok.className = "b " + (danger ? "d" : "p");
+  $("modalBg").classList.add("open");
+  ok.focus();
+  return new Promise(res => { modalResolve = res; });
+}
+function closeModal(val) {
+  $("modalBg").classList.remove("open");
+  if (modalResolve) { const r = modalResolve; modalResolve = null; r(val); }
+}
+$("modalCancel").onclick = () => closeModal(false);
+$("modalOk").onclick = () => closeModal(true);
+$("modalBg").onclick = e => { if (e.target === $("modalBg")) closeModal(false); };
+document.addEventListener("keydown", e => { if (e.key === "Escape" && modalResolve) closeModal(false); });
+
 async function api(path, body) {
-  const r = await fetch(path, { method: body ? "POST" : "GET", headers: { "X-Visionary-Token": token || "", "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: { "X-Visionary-Token": token || "", "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined
+  });
   const j = await r.json().catch(() => ({ error: "unexpected response" }));
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
 async function act(fn, okMsg, btn) {
   if (btn) btn.disabled = true;
-  try { const r = await fn(); if (okMsg) toast(typeof okMsg === "function" ? okMsg(r) : okMsg); await refresh(); return r; }
-  catch (e) { toast(e.message, true); }
-  finally { if (btn) btn.disabled = false; }
+  try {
+    const r = await fn();
+    if (okMsg) toast(typeof okMsg === "function" ? okMsg(r) : okMsg);
+    await refresh();
+    return r;
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
+
 const when = t => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-const table = (heads, rows, empty) => rows.length ? el("table", {}, el("thead", {}, el("tr", {}, heads.map(h => el("th", {}, h)))), el("tbody", {}, rows)) : el("div", { class: "empty" }, empty);
+const table = (heads, rows, empty) => rows.length
+  ? el("table", {}, el("thead", {}, el("tr", {}, heads.map(h => el("th", {}, h)))), el("tbody", {}, rows))
+  : el("div", { class: "empty" }, empty);
 const card = (k, v, s) => el("div", { class: "card" }, el("div", { class: "k" }, k), el("div", { class: "v" }, v), s && el("div", { class: "s" }, s));
 
-const tabs = [["overview", "Overview"], ["scan", "Scan"], ["threats", "Threats"], ["definitions", "Definitions"], ["ai", "AI"], ["behaviour", "Behaviour"], ["settings", "Settings"], ["activity", "Activity"]];
-let current = "overview", status = null;
-tabs.forEach(([id, name]) => $("nav").append(el("button", { id: "n-" + id, on: { click: () => show(id) } }, el("span", {}, name), el("span", { class: "count", id: "c-" + id, hidden: "" }))));
+const tabs = [
+  ["overview", "Overview", "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"],
+  ["scan", "Scan", ["M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z", "M20 20l-4.2-4.2"]],
+  ["threats", "Threats", ["M12 9v4", "M12 17h.01", "M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"]],
+  ["ai", "AI Engine", ["M12 3v3", "M12 18v3", "M4.9 4.9l2.1 2.1", "M17 17l2.1 2.1", "M3 12h3", "M18 12h3", "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"]],
+  ["definitions", "Definitions", ["M4 6h16", "M4 12h16", "M4 18h10"]],
+  ["behaviour", "Behaviour", "M3 12h4l3-7 4 14 3-7h4"],
+  ["settings", "Settings", ["M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"]],
+  ["activity", "Activity", ["M12 8v4l3 2", "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"]]
+];
+let current = "overview", status = null, requirePw = false, disableFor = "15m";
+let cachedThreats = { items: [], dets: [] }, cachedAnomalies = [], cachedEvents = [];
+let aiData = null;
+
+tabs.forEach(([id, name, d]) => {
+  $("nav").append(el("button", { id: "n-" + id, on: { click: () => show(id) } },
+    icon(d), el("span", { class: "nav-lbl" }, name), el("span", { class: "count", id: "c-" + id, hidden: "" })));
+});
 $("nav").append(el("div", { class: "foot", id: "foot" }));
-function show(id) { current = id; tabs.forEach(([t]) => { $(t).classList.toggle("on", t === id); $("n-" + t).classList.toggle("on", t === id); }); refresh(); }
+
+function show(id) {
+  current = id;
+  const meta = tabs.find(t => t[0] === id);
+  $("topTitle").textContent = meta ? meta[1] : "Visionary";
+  tabs.forEach(([t]) => { $(t).classList.toggle("on", t === id); $("n-" + t).classList.toggle("on", t === id); });
+  refresh();
+}
+
+$("topQuick").onclick = () => {
+  show("scan");
+  setTimeout(() => startScan("quick", $("bQuick")), 50);
+};
+
+function verdictLabel(v) {
+  const cls = v === "malicious" ? "t-bad" : v === "suspicious" ? "t-warn" : v === "clean" || v === "benign" ? "t-ok" : "t-muted";
+  return el("span", { class: "st " + cls }, v || "unknown");
+}
+
+function aiBreakdown(ai) {
+  if (!ai) return null;
+  const pct = Math.round((ai.confidence || 0) * 100);
+  const parts = [
+    el("span", { class: "st " + (ai.verdict === "malicious" ? "t-bad" : ai.verdict === "suspicious" ? "t-warn" : "t-ok") }, "AI " + ai.verdict),
+    el("span", { class: "meta-line" }, pct + "% confidence"),
+    ai.category && el("span", { class: "meta-line" }, "· " + ai.category),
+    ai.recommended_action && el("span", { class: "meta-line" }, "· action: " + ai.recommended_action),
+    el("span", { class: "meta-line" }, "· " + [ai.provider, ai.model].filter(Boolean).join(" / ") + (ai.cached ? " (cached)" : ""))
+  ].filter(Boolean);
+  return el("div", { class: "ai-box" },
+    el("div", { class: "ai-head" }, parts),
+    ai.summary && el("div", { class: "ai-summary" }, ai.summary),
+    (ai.reasons || []).length ? el("ul", { class: "ai-reasons" }, ai.reasons.slice(0, 4).map(x => el("li", {}, x))) : null);
+}
 
 function findings(r) {
-  return (r.findings || []).filter(f => f.score > 0 || f.layer === "ai").slice(0, 6).map(f =>
-    el("div", { class: "find" }, el("span", { class: "tag" }, f.layer), " ", f.name, f.detail ? " — " + f.detail : ""));
+  return (r.findings || []).filter(f => f.score > 0 || f.layer === "ai").slice(0, 5).map(f =>
+    el("div", { class: "find" }, el("span", { class: "find-layer" }, f.layer), f.name, f.detail ? " — " + f.detail : ""));
 }
-function verdictTag(v) { return el("span", { class: "tag " + (v === "malicious" ? "bad" : "warn") }, v); }
+
+function openExplain(path) {
+  if (!path) return;
+  show("threats");
+  $("xPath").value = path;
+  $("xPath").scrollIntoView({ behavior: "smooth", block: "center" });
+  runExplain(path, $("bExplain"));
+}
+
+function detectionActions(path, alreadyQuarantined) {
+  if (!path) return null;
+  return el("div", { class: "row-tight", style: "margin-top:8px" },
+    el("button", { class: "b sm", on: { click: () => openExplain(path) } }, "Explain with AI"),
+    !alreadyQuarantined && el("button", { class: "b sm d", on: { click: async e => {
+      if (await askConfirm("Quarantine file", "Move this file into encoded quarantine so it cannot run?\n" + path, "Quarantine", true)) {
+        act(() => api("/api/quarantine", { action: "quarantine", path }), "File quarantined", e.target);
+      }
+    } } }, "Quarantine"),
+    el("button", { class: "b sm", on: { click: async e => {
+      if (await askConfirm("Allowlist file", "Trust this file path in future scans?\n" + path, "Allowlist", false)) {
+        act(() => api("/api/settings", { action: "allow-add", value: path }), "Added to allowlist", e.target);
+      }
+    } } }, "Allowlist"));
+}
 
 async function refresh() {
   try {
     status = await api("/api/status" + (current === "overview" ? "?windows=1" : ""));
   } catch (e) { toast(e.message, true); return; }
   const s = status;
-  $("dot").className = s.protection ? "" : "off";
-  $("foot").textContent = "v" + s.version + (s.game_mode ? " · game mode" : "");
+  $("brandMark").className = "brand-mark" + (s.protection ? "" : " off");
+  $("brandSub").textContent = (s.edition === "lite" ? "Lite Edition" : "AI Protection") + (s.game_mode ? " · Game mode" : "");
+  $("topMeta").textContent = (s.protection ? "Protected" : "Paused") + " · AI " + (s.ai_mode || "off") + (s.ai_sensitivity ? " (" + s.ai_sensitivity + ")" : "");
+  fill($("foot"),
+    el("div", { class: "num" }, "v" + s.version + " · " + (s.profile || "balanced")),
+    el("div", {}, s.guard_running ? "Guard active" : "On-demand mode"));
   const q = $("c-threats"); q.hidden = !s.quarantined; q.textContent = s.quarantined;
+
   if (current === "overview") overview(s);
   if (current === "scan") scanTab(s);
   if (current === "threats") threats();
@@ -286,12 +858,16 @@ async function refresh() {
 function overview(s) {
   $("shield").className = "shield" + (s.protection ? "" : " off");
   $("tick").setAttribute("d", s.protection ? "M8.5 12l2.5 2.5 4.5-5" : "M9 9l6 6M15 9l-6 6");
-  $("protT").textContent = s.protection ? (s.guard_running ? "You are protected" : "Protection is on, but no guard is running") : "Real-time protection is off";
-  $("protD").textContent = s.protection ? (s.guard_running ? "Watching new files and newly started programs." : "Keep this window open, or install the service so protection starts with Windows.") : s.protection_reason + ".";
+  $("protT").textContent = s.protection ? (s.guard_running ? "Real-time AI protection is active" : "Protection enabled — guard waiting") : "Real-time protection is off";
+  $("protD").textContent = s.protection
+    ? (s.guard_running ? "Monitoring new files, process launches, and LOLBin anomalies in real time." : "Keep this console open or install the Windows service so protection starts with Windows.")
+    : (s.protection_reason || "Disabled") + ".";
+
   if (s.protection) {
-    const sel = el("select", { "aria-label": "Disable for" }, [["15m", "15 minutes"], ["1h", "1 hour"], ["4h", "4 hours"], ["restart", "Until restart"], ["permanent", "Until I turn it back on"]].map(([v, t]) => el("option", { value: v }, t)));
+    const sel = el("select", { "aria-label": "Disable for" },
+      [["15m", "15 minutes"], ["1h", "1 hour"], ["4h", "4 hours"], ["restart", "Until restart"], ["permanent", "Until re-enabled"]].map(([v, t]) => el("option", { value: v }, t)));
     const pw = el("input", { type: "password", placeholder: "Computer password", style: "max-width:170px", "aria-label": "Computer password" });
-    fill($("protAct"), sel, pw, el("button", { class: "b d", on: { click: e => act(() => api("/api/protection", { action: "disable", for: sel.value, password: pw.value }), "Protection disabled", e.target) } }, "Disable"));
+    fill($("protAct"), sel, pw, el("button", { class: "b d", on: { click: e => act(() => api("/api/protection", { action: "disable", for: sel.value, password: pw.value }), "Protection paused", e.target) } }, "Pause"));
     pw.hidden = !requirePw; sel.value = disableFor;
     $("protCli").textContent = "visionary protection disable --for " + sel.value;
     sel.addEventListener("change", () => { disableFor = sel.value; $("protCli").textContent = "visionary protection disable --for " + sel.value; });
@@ -299,29 +875,59 @@ function overview(s) {
     fill($("protAct"), el("button", { class: "b p", on: { click: e => act(() => api("/api/protection", { action: "enable" }), "Protection enabled", e.target) } }, "Turn on now"));
     $("protCli").textContent = "visionary protection enable";
   }
-  const d = s.definitions;
+
+  /* 6-stage AI Protection Pipeline */
+  const d = s.definitions || { hashes: 0, rules: 0, certs: 0 };
+  const localOn = (s.ai_mode === "local" || s.ai_mode === "hybrid") && !!s.local_model;
+  const cloudOn = (s.ai_mode === "cloud" || s.ai_mode === "hybrid") && s.cloud_key_set;
+  const stages = [
+    ["01", "Hash & YARA", d.hashes.toLocaleString() + " hashes · " + d.rules + " rules", "Active", "t-ok", "definitions"],
+    ["02", "Static & Certs", "PE entropy, imports, WinVerifyTrust", "Active", "t-ok", "scan"],
+    ["03", "Behaviour & LOLBin", s.behavior_learning ? "Learning baseline" : (s.behavior.parent_child_edges + " launch pairs"), s.behavior_learning ? "Learning" : "Active", s.behavior_learning ? "t-info" : "t-ok", "behaviour"],
+    ["04", "Defender & VT", (s.windows_security && s.windows_security.available ? "Defender AMSI" : "Local rules") + (s.virustotal_key_set ? " + VT" : ""), s.virustotal_key_set || (s.windows_security && s.windows_security.available) ? "Ready" : "Standby", "t-info", "ai"],
+    ["05", "Local AI (<3B)", s.local_model || "No local model active", localOn ? "Active" : "Standby", localOn ? "t-ok" : "t-muted", "ai"],
+    ["06", "Cloud AI", s.cloud_provider ? (s.cloud_provider + (s.cloud_model ? " · " + s.cloud_model : "")) : "Gemini / Claude / OpenAI", cloudOn ? "Active" : "Standby", cloudOn ? "t-ok" : "t-muted", "ai"]
+  ];
+  fill($("pipeline"), stages.map(([n, title, desc, st, cls, dest]) =>
+    el("button", { class: "stage", on: { click: () => show(dest) } },
+      el("span", { class: "stage-n" }, "LAYER " + n),
+      el("span", { class: "stage-t" }, title),
+      el("span", { class: "stage-s" }, desc),
+      el("span", { class: "stage-st " + cls }, st))));
+
+  const st = s.ai_stats || { triaged: 0, convicted: 0, cleared: 0, cache_hits: 0 };
+  const aiLabel = { off: "Off", local: "Local (<3B)", cloud: "Cloud", hybrid: "Hybrid" }[s.ai_mode] || s.ai_mode;
+  const aiSub = [
+    s.ai_sensitivity ? "Sensitivity: " + s.ai_sensitivity : "",
+    st.triaged ? (st.triaged + " triaged · " + st.convicted + " convicted · " + st.cleared + " cleared") : ([s.local_model, s.cloud_model].filter(Boolean).join(" -> ") || "Configure local or cloud AI in AI Engine")
+  ].filter(Boolean).join(" · ");
+
   fill($("cards"),
-    card("Definitions", d.hashes.toLocaleString() + " hashes", d.rules + " rules · " + d.certs + " certificates · " + s.channels + (s.channels === 1 ? " channel" : " channels")),
-    card("AI", { off: "Off", local: "Local", cloud: "Cloud", hybrid: "Hybrid" }[s.ai_mode] || s.ai_mode, [s.local_model, s.cloud_model].filter(Boolean).join(" → ") || "No model reviewing suspicious files"),
-    card("Behaviour model", s.behavior.executables + " programs", s.behavior_learning ? "Learning what is normal" : s.behavior.parent_child_edges + " launch pairs known"),
-    card("Quarantine", s.quarantined + (s.quarantined === 1 ? " item" : " items"), s.boot_scan_scheduled ? "Boot scan scheduled" : "Profile: " + s.profile + (s.game_mode ? " · game mode active" : "")));
+    card("Definitions", d.hashes.toLocaleString() + " hashes", d.rules + " YARA rules · " + d.certs + " certs · " + s.channels + (s.channels === 1 ? " channel" : " channels")),
+    card("AI Triage", aiLabel, aiSub),
+    card("Behaviour Model", s.behavior.executables + " programs", s.behavior_learning ? "Learning baseline on this PC" : s.behavior.parent_child_edges + " known launch pairs"),
+    card("Quarantine", s.quarantined + (s.quarantined === 1 ? " item" : " items"), s.boot_scan_scheduled ? "Boot scan scheduled" : "Profile: " + s.profile + (s.game_mode ? " · game mode" : "")));
+
   const w = s.windows_security;
-  if (!w || !w.available) { fill($("win"), el("div", { class: "muted" }, "Windows Security is not available on this system. Visionary runs as the only scanner.")); return; }
+  if (!w || !w.available) {
+    fill($("win"), el("div", { class: "muted" }, "Windows Security is not available in this environment. Visionary runs standalone."));
+    return;
+  }
   fill($("win"),
     el("div", {}, el("b", {}, "Microsoft Defender: " + w.running_mode + " mode"), " · real-time " + (w.realtime_enabled ? "on" : "off") + " · definitions " + (w.signature_updated || "unknown")),
-    el("div", { class: "muted" }, "Visionary's role: " + w.visionary_role),
+    el("div", { class: "muted", style: "margin-top:4px" }, "Visionary role: " + w.visionary_role),
     (w.notes || []).map(n => el("div", { class: "note" }, n)),
     el("div", { class: "row" },
       el("button", { class: "b", on: { click: e => act(() => api("/api/windows", { action: "coexist" }), "Defender exclusions added", e.target) } }, "Set up co-existence"),
       el("button", { class: "b", on: { click: e => act(() => api("/api/windows", { action: w.running_mode === "Passive" ? "passive-off" : "passive-on" }), r => r.message, e.target) } }, w.running_mode === "Passive" ? "Return Defender to active" : "Request Defender passive mode")),
     el("span", { class: "cli" }, "visionary windows coexist  ·  visionary windows passive on"));
 }
-let requirePw = false, disableFor = "15m";
 
+/* SCAN */
 let jobTimer = null;
 function scanTab(s) {
   $("bootT").textContent = s.boot_scan_scheduled ? "A boot-time scan is scheduled for the next restart" : "No boot-time scan scheduled";
-  $("bBoot").textContent = s.boot_scan_scheduled ? "Cancel" : "Schedule for next restart";
+  $("bBoot").textContent = s.boot_scan_scheduled ? "Cancel schedule" : "Schedule for next restart";
   pollJob();
 }
 function scanCli() {
@@ -335,74 +941,255 @@ function startScan(kind, btn) {
 }
 $("bQuick").onclick = e => startScan("quick", e.target);
 $("bTarget").onclick = e => startScan("targeted", e.target);
-$("bBoot").onclick = e => act(() => api("/api/preboot", { action: status.boot_scan_scheduled ? "cancel" : "schedule" }), "Done", e.target);
-$("bOffline").onclick = e => { if (confirm("Windows will restart into Microsoft Defender Offline and scan before Windows loads. Save your work first. Continue?")) act(() => api("/api/windows", { action: "offline-scan" }), "Restart requested", e.target); };
+$("bBoot").onclick = e => act(() => api("/api/preboot", { action: status.boot_scan_scheduled ? "cancel" : "schedule" }), "Boot-time scan updated", e.target);
+$("bOffline").onclick = async e => {
+  if (await askConfirm("Restart into Defender Offline", "Windows will reboot into Microsoft Defender Offline to scan before Windows loads. Save your work first.", "Restart & scan", true)) {
+    act(() => api("/api/windows", { action: "offline-scan" }), "Restart requested", e.target);
+  }
+};
+
 async function pollJob() {
   clearTimeout(jobTimer);
   let j; try { j = await api("/api/job"); } catch (e) { return; }
   const box = $("jobBox");
   if (!j.kind) { fill(box); return; }
-  const rows = (j.detections || []).map(r => el("tr", {}, el("td", {}, verdictTag(r.verdict)), el("td", {}, el("div", { class: "path" }, r.path), el("b", {}, r.threat), " · score " + r.score, r.action ? el("div", { class: "find" }, "→ " + r.action) : null, findings(r))));
+  const rows = (j.detections || []).map(r => el("tr", {},
+    el("td", { class: "num", style: "white-space:nowrap" }, verdictLabel(r.verdict), el("div", { class: "meta-line" }, "score " + r.score)),
+    el("td", {},
+      el("div", { class: "path" }, r.path),
+      el("div", { style: "margin-top:2px" }, el("b", {}, r.threat || "Suspicious file"), r.action ? el("span", { class: "meta-line" }, " · " + r.action) : null),
+      aiBreakdown(r.ai),
+      findings(r),
+      detectionActions(r.path, r.action && r.action.indexOf("quarantine") >= 0))));
   const sum = j.summary;
-  fill(box, el("h2", {}, j.running ? "Scanning…" : "Last scan"),
+  fill(box,
+    el("h2", {}, j.running ? "Scan in progress" : "Last scan results"),
     el("div", { class: "card" },
-      j.running ? [el("div", {}, el("b", {}, j.files.toLocaleString() + " files"), " checked"), el("div", { class: "bar" }, el("i")), el("div", { class: "path muted" }, j.current || ""), el("div", { class: "row" }, el("button", { class: "b", on: { click: () => api("/api/job/cancel", {}) } }, "Stop"))]
-        : [el("div", { class: "v" }, sum ? (sum.malicious || sum.suspicious ? sum.malicious + " malicious, " + sum.suspicious + " suspicious" : "No threats found") : (j.error || "Scan ended")),
-           sum && el("div", { class: "muted" }, sum.files.toLocaleString() + " files in " + sum.seconds + "s" + (sum.cached ? " · " + sum.cached + " unchanged since last scan" : "") + (sum.quarantined ? " · " + sum.quarantined + " quarantined" : "") + (sum.cancelled ? " · stopped early" : ""))]),
-    rows.length ? el("div", { class: "tablewrap", style: "margin-top:12px" }, table(["Verdict", "File"], rows, "")) : null);
-  if (j.running && current === "scan") jobTimer = setTimeout(pollJob, 700);
+      j.running
+        ? [el("div", { class: "num" }, el("b", {}, j.files.toLocaleString() + " files"), " checked"),
+           el("div", { class: "bar" }, el("i")),
+           el("div", { class: "path muted" }, j.current || "Starting…"),
+           el("div", { class: "row" }, el("button", { class: "b d", on: { click: () => api("/api/job/cancel", {}) } }, "Stop scan"))]
+        : [el("div", { class: "v" }, sum ? (sum.malicious || sum.suspicious ? sum.malicious + " malicious · " + sum.suspicious + " suspicious" : "No threats found") : (j.error || "Scan ended")),
+           sum && el("div", { class: "meta-line", style: "margin-top:4px" },
+             sum.files.toLocaleString() + " files in " + sum.seconds + "s" +
+             (sum.cached ? " · " + sum.cached + " cached clean" : "") +
+             (sum.quarantined ? " · " + sum.quarantined + " quarantined" : "") +
+             (sum.cancelled ? " · stopped early" : ""))]),
+    rows.length ? el("div", { class: "tablewrap", style: "margin-top:12px" }, table(["Verdict", "Detection & AI Analysis"], rows, "")) : null);
+  if (j.running && current === "scan") jobTimer = setTimeout(pollJob, 600);
+  else if (!j.running && sum && current === "scan") refreshStatusOnly();
+}
+async function refreshStatusOnly() {
+  try {
+    status = await api("/api/status");
+    const q = $("c-threats"); q.hidden = !status.quarantined; q.textContent = status.quarantined;
+  } catch (e) {}
 }
 
+/* THREATS & AI ANALYST */
 async function threats() {
   const [items, evs] = await Promise.all([api("/api/quarantine"), api("/api/events?n=400")]);
-  fill($("qTable"), table(["When", "Threat", "Original location", ""], items.map(it => el("tr", {},
-    el("td", {}, when(it.time)), el("td", {}, el("b", {}, it.threat), el("div", { class: "muted path" }, it.id)), el("td", { class: "path" }, it.original),
-    el("td", {}, el("div", { class: "row" },
-      el("button", { class: "b", on: { click: e => { if (confirm("Restore this file and allow it from now on?\n" + it.original)) act(() => api("/api/quarantine", { action: "restore", id: it.id, allow: true }), "Restored and allowlisted", e.target); } } }, "Restore"),
-      el("button", { class: "b d", on: { click: e => { if (confirm("Delete this file permanently?")) act(() => api("/api/quarantine", { action: "delete", id: it.id }), "Deleted", e.target); } } }, "Delete"))))), "Nothing in quarantine."));
-  const dets = evs.filter(e => e.type === "detection").slice(0, 50);
-  fill($("dTable"), table(["When", "Verdict", "File"], dets.map(e => { const r = e.data || {}; return el("tr", {}, el("td", {}, when(e.time)), el("td", {}, verdictTag(r.verdict || "suspicious")),
-    el("td", {}, el("div", { class: "path" }, r.path || e.message), r.threat ? el("b", {}, r.threat) : null, r.threat ? " · score " + r.score : "", r.action ? el("div", { class: "find" }, "→ " + r.action) : null, findings(r))); }), "No detections yet."));
+  cachedThreats = { items, dets: evs.filter(e => e.type === "detection").slice(0, 60) };
+  renderThreats();
 }
-$("bExplain").onclick = async e => {
-  const out = $("xOut"); fill(out, el("div", { class: "bar" }, el("i")));
-  const r = await act(() => api("/api/ai", { action: "explain", path: $("xPath").value.trim() }), null, e.target);
-  fill(out, r ? [el("div", { class: "row" }, r.result.verdict === "clean" ? el("span", { class: "tag ok" }, "clean") : verdictTag(r.result.verdict), el("span", { class: "muted" }, "score " + r.result.score + " · " + r.model)), el("pre", { class: "explain" }, r.explanation)] : []);
-};
+function renderThreats() {
+  const q = $("tFilter").value.trim().toLowerCase();
+  const items = cachedThreats.items.filter(it => !q || (it.original + " " + it.threat + " " + it.id).toLowerCase().includes(q));
+  fill($("qTable"), table(["When", "Threat", "Original location", "Actions"], items.map(it => el("tr", {},
+    el("td", { class: "num", style: "white-space:nowrap" }, when(it.time)),
+    el("td", {}, el("b", {}, it.threat), el("div", { class: "meta-line path" }, it.id)),
+    el("td", { class: "path" }, it.original),
+    el("td", {}, el("div", { class: "row-tight" },
+      el("button", { class: "b sm", on: { click: async e => {
+        if (await askConfirm("Restore & allowlist file", "Restore this file to its original location and add its SHA-256 to the allowlist?\n" + it.original, "Restore", false)) {
+          act(() => api("/api/quarantine", { action: "restore", id: it.id, allow: true }), "Restored and allowlisted", e.target);
+        }
+      } } }, "Restore"),
+      el("button", { class: "b sm d", on: { click: async e => {
+        if (await askConfirm("Delete permanently", "Permanently remove this quarantined item? This cannot be undone.\n" + it.original, "Delete", true)) {
+          act(() => api("/api/quarantine", { action: "delete", id: it.id }), "Deleted permanently", e.target);
+        }
+      } } }, "Delete"))))), "Nothing in quarantine."));
 
+  const dets = cachedThreats.dets.filter(e => {
+    if (!q) return true;
+    const r = e.data || {};
+    return ((r.path || "") + " " + (r.threat || "") + " " + e.message + " " + (r.ai ? r.ai.verdict + " " + r.ai.category : "")).toLowerCase().includes(q);
+  });
+  fill($("dTable"), table(["When", "Verdict", "Detection & AI Analysis"], dets.map(e => {
+    const r = e.data || {};
+    return el("tr", {},
+      el("td", { class: "num", style: "white-space:nowrap" }, when(e.time)),
+      el("td", { class: "num", style: "white-space:nowrap" }, verdictLabel(r.verdict || "suspicious"), r.score ? el("div", { class: "meta-line" }, "score " + r.score) : null),
+      el("td", {},
+        el("div", { class: "path" }, r.path || e.message),
+        r.threat && el("div", { style: "margin-top:2px" }, el("b", {}, r.threat), r.action ? el("span", { class: "meta-line" }, " · " + r.action) : null),
+        aiBreakdown(r.ai),
+        findings(r),
+        detectionActions(r.path, r.action && r.action.indexOf("quarantine") >= 0)));
+  }), "No detections recorded yet."));
+}
+$("tFilter").addEventListener("input", renderThreats);
+
+async function runExplain(path, btn) {
+  const out = $("xOut");
+  if (!path) { toast("Enter a file path to analyze", true); return; }
+  fill(out, el("div", { class: "bar" }, el("i")), el("div", { class: "meta-line" }, "Scanning file and requesting AI briefing…"));
+  const r = await act(() => api("/api/ai", { action: "explain", path }), null, btn);
+  if (!r) { fill(out); return; }
+  fill(out,
+    el("div", { class: "row", style: "margin-top:12px" },
+      verdictLabel(r.result.verdict),
+      el("span", { class: "meta-line" }, "score " + r.result.score + " · analyzed by " + r.model)),
+    aiBreakdown(r.result.ai),
+    el("pre", { class: "explain" }, r.explanation));
+}
+$("bExplain").onclick = e => runExplain($("xPath").value.trim(), e.target);
+
+/* DEFINITIONS */
 async function defsTab() {
   const d = await api("/api/defs");
-  fill($("defCards"), card("Hashes", d.stats.hashes.toLocaleString()), card("Rules", d.stats.rules, d.stats.rules_skipped ? d.stats.rules_skipped + " use unsupported features" : "including built-in"), card("Certificates", d.stats.certs, "blocklisted signers"), card("Revision", d.stats.revision, "clean-file cache follows it"));
-  fill($("sTable"), table(["Source", "Kind", "Entries", "Imported", ""], (d.sources || []).map(s => el("tr", {}, el("td", {}, el("b", {}, s.name), s.channel ? el("div", { class: "muted" }, "channel " + s.channel) : null), el("td", {}, s.kind), el("td", {}, s.count.toLocaleString() + (s.skipped ? " (+" + s.skipped + " unusable)" : "")), el("td", {}, when(s.imported_at)),
-    el("td", {}, s.channel ? null : el("button", { class: "b d", on: { click: e => act(() => api("/api/defs", { action: "remove", name: s.name }), "Removed", e.target) } }, "Remove")))), "Only the built-in rules are loaded. Import a file or subscribe to a channel."));
-  fill($("cTable"), table(["Channel", "Every", "Last check", ""], (d.channels || []).map(c => el("tr", {}, el("td", {}, el("b", {}, c.name), el("div", { class: "muted path" }, c.url)), el("td", {}, c.interval_hours + " h"), el("td", {}, c.last_checked && !c.last_checked.startsWith("0001") ? when(c.last_checked) + " — " + (c.last_status || "") : "never"),
-    el("td", {}, el("div", { class: "row" }, el("button", { class: "b", on: { click: e => act(() => api("/api/defs", { action: "channel-update", name: c.name }), r => r.map(x => x.name + ": " + x.status).join("; "), e.target) } }, "Update"), el("button", { class: "b d", on: { click: e => act(() => api("/api/defs", { action: "channel-remove", name: c.name }), "Unsubscribed", e.target) } }, "Remove"))))), "No channels subscribed."));
-  if (!$("cPreset").options.length) { fill($("cPreset"), el("option", { value: "" }, "Custom URL"), d.presets.map(p => el("option", { value: p.name, title: p.about }, p.name)));
-    $("cPreset").onchange = () => { const p = d.presets.find(x => x.name === $("cPreset").value); $("cName").value = p ? p.name : ""; $("cURL").value = p ? p.url : ""; }; }
+  fill($("defCards"),
+    card("Hashes", d.stats.hashes.toLocaleString()),
+    card("YARA Rules", d.stats.rules, d.stats.rules_skipped ? d.stats.rules_skipped + " skipped (unsupported features)" : "including built-in signatures"),
+    card("Certificates", d.stats.certs, "blocklisted signers"),
+    card("Revision", d.stats.revision, "clean-file cache tracks revision"));
+  fill($("sTable"), table(["Source", "Kind", "Entries", "Imported", ""], (d.sources || []).map(s => el("tr", {},
+    el("td", {}, el("b", {}, s.name), s.channel ? el("div", { class: "meta-line" }, "channel: " + s.channel) : null),
+    el("td", {}, s.kind),
+    el("td", { class: "num" }, s.count.toLocaleString() + (s.skipped ? " (+" + s.skipped + " skipped)" : "")),
+    el("td", { class: "num" }, when(s.imported_at)),
+    el("td", {}, s.channel ? null : el("button", { class: "b sm d", on: { click: e => act(() => api("/api/defs", { action: "remove", name: s.name }), "Removed", e.target) } }, "Remove")))),
+    "Only the built-in rules are loaded. Import a file or subscribe to a channel."));
+  fill($("cTable"), table(["Channel", "Interval", "Last check", ""], (d.channels || []).map(c => el("tr", {},
+    el("td", {}, el("b", {}, c.name), el("div", { class: "meta-line path" }, c.url)),
+    el("td", { class: "num" }, c.interval_hours + " h"),
+    el("td", { class: "num" }, c.last_checked && !c.last_checked.startsWith("0001") ? when(c.last_checked) + " — " + (c.last_status || "") : "never"),
+    el("td", {}, el("div", { class: "row-tight" },
+      el("button", { class: "b sm", on: { click: e => act(() => api("/api/defs", { action: "channel-update", name: c.name }), r => r.map(x => x.name + ": " + x.status).join("; "), e.target) } }, "Update"),
+      el("button", { class: "b sm d", on: { click: e => act(() => api("/api/defs", { action: "channel-remove", name: c.name }), "Unsubscribed", e.target) } }, "Remove"))))),
+    "No channels subscribed."));
+  if (!$("cPreset").options.length) {
+    fill($("cPreset"), el("option", { value: "" }, "Custom URL"), (d.presets || []).map(p => el("option", { value: p.name, title: p.about }, p.name)));
+    $("cPreset").onchange = () => { const p = (d.presets || []).find(x => x.name === $("cPreset").value); $("cName").value = p ? p.name : ""; $("cURL").value = p ? p.url : ""; };
+  }
 }
 $("bImport").onclick = e => act(() => api("/api/defs", { action: "import", path: $("iPath").value.trim(), kind: $("iKind").value }), r => "Imported " + r.count.toLocaleString() + " " + r.kind + " definitions", e.target);
 $("bChan").onclick = e => act(() => api("/api/defs", { action: "channel-add", name: $("cName").value.trim(), url: $("cURL").value.trim() }), r => r.map(x => x.name + ": " + x.status).join("; "), e.target);
 $("bChanUp").onclick = e => act(() => api("/api/defs", { action: "channel-update", name: "" }), r => r.length ? r.map(x => x.name + ": " + x.status).join("; ") : "No channels subscribed", e.target);
 
+/* AI HUB */
+function syncCloudProviderUI(a, provId) {
+  const list = a.cloud_providers || [];
+  const p = list.find(x => x.id === provId) || list[0];
+  if (!p) return;
+  const models = p.models || [];
+  fill($("cModSel"), models.map(m => el("option", { value: m }, m)));
+  const curModel = (provId === a.cloud_provider && a.cloud.model) ? a.cloud.model : p.default_model;
+  if (models.includes(curModel)) $("cModSel").value = curModel;
+  $("cModCustom").value = curModel;
+  $("cEndpointRow").hidden = provId !== "openai";
+  $("cEndpoint").value = a.cloud.endpoint || "";
+  $("kCloud").placeholder = p.name + " API key (encrypted at rest)";
+  $("cCli").textContent = "visionary ai cloud provider " + provId + "  ·  visionary ai cloud set-key";
+}
+
 async function aiTab() {
   const a = await api("/api/ai");
-  $("aMode").value = a.mode; $("aCli").textContent = "visionary ai mode " + a.mode; $("aShare").checked = a.cloud.share_snippets;
-  fill($("aLocal"), el("div", {}, el("b", {}, a.local.model || "No model selected"), " via " + a.local.provider + " · limit " + a.local.max_params_b + "B parameters · runtime ", el("span", { class: "tag " + (a.ollama === "running" ? "ok" : "warn") }, a.ollama)),
-    a.ollama !== "running" && a.local.provider === "ollama" ? el("div", { class: "note" }, "Ollama is not answering at " + a.local.endpoint + ". Install it from ollama.com and start it, then download a model below.") : null);
-  fill($("mTable"), table(["Installed model", "Parameters", "Size", ""], a.models.map(m => el("tr", {}, el("td", {}, el("b", {}, m.name), m.loaded ? [" ", el("span", { class: "tag ok" }, "loaded")] : null), el("td", {}, m.params || "?", m.params_b > a.local.max_params_b ? [" ", el("span", { class: "tag warn" }, "over limit")] : null), el("td", {}, m.size_mb + " MB"),
-    el("td", {}, m.name === a.local.model ? el("span", { class: "tag ok" }, "in use") : el("button", { class: "b", disabled: m.params_b > a.local.max_params_b ? "" : false, on: { click: e => act(() => api("/api/ai", { action: "use", name: m.name }), "Using " + m.name, e.target) } }, "Use")))), "No local models installed yet."));
-  fill($("gTable"), table(["Stored model", "Parameters", "Size", "Source", ""], a.stored.map(m => el("tr", {}, el("td", {}, el("b", {}, m.name)), el("td", {}, m.params_b.toFixed(2) + "B"), el("td", {}, m.size_mb + " MB"), el("td", {}, m.source),
-    el("td", {}, m.path === a.local.model_path ? el("span", { class: "tag ok" }, "in use") : el("button", { class: "b", on: { click: e => act(() => api("/api/ai", { action: "use-stored", name: m.name }), "Using " + m.name, e.target) } }, "Use"), " ",
-      el("button", { class: "b d", on: { click: e => confirm("Delete " + m.name + "?") && act(() => api("/api/ai", { action: "remove-stored", name: m.name }), "Removed", e.target) } }, "Delete")))), "No GGUF models yet."));
+  aiData = a;
+  $("aMode").value = a.mode;
+  $("aSens").value = a.sensitivity || "balanced";
+  $("aThr").value = (a.confidence_threshold || 0.80).toFixed(2);
+  $("aShare").checked = !!a.cloud.share_snippets;
+  $("aCpuOnly").checked = !!a.local.cpu_only;
+  $("aCli").textContent = "visionary ai mode " + a.mode + "  ·  visionary ai sensitivity " + (a.sensitivity || "balanced");
+
+  const st = a.ai_stats || { triaged: 0, convicted: 0, cleared: 0, cache_hits: 0, errors: 0 };
+  fill($("aStats"),
+    el("span", {}, "Session triage: ", el("b", {}, st.triaged.toLocaleString())),
+    el("span", {}, "Convicted: ", el("b", { class: st.convicted ? "t-bad" : "" }, st.convicted.toLocaleString())),
+    el("span", {}, "Cleared benign: ", el("b", { class: st.cleared ? "t-ok" : "" }, st.cleared.toLocaleString())),
+    el("span", {}, "Cache hits: ", el("b", {}, st.cache_hits.toLocaleString())),
+    el("span", {}, "Errors: ", el("b", { class: st.errors ? "t-warn" : "" }, st.errors.toLocaleString())));
+
+  /* Cloud providers */
+  const provs = a.cloud_providers || [];
+  fill($("cProv"), provs.map(p => el("option", { value: p.id }, p.name)));
+  $("cProv").value = a.cloud_provider || "gemini";
+  syncCloudProviderUI(a, $("cProv").value);
+
+  const keys = a.cloud_keys || {};
+  const keySummary = provs.map(p => {
+    const set = !!keys[p.id];
+    return el("span", { style: "margin-right:12px" }, p.name + ": ", el("span", { class: "st " + (set ? "t-ok" : "t-muted") }, set ? "key stored" : "not set"));
+  });
+  const activeProv = provs.find(p => p.id === a.cloud_provider);
+  fill($("aCloud"),
+    el("div", {}, el("b", {}, (activeProv ? activeProv.name : a.cloud_provider) + " · " + a.cloud.model), " — ",
+      el("span", { class: "st " + (a.cloud_key_set ? "t-ok" : "t-warn") }, a.cloud_key_set ? "ready" : "API key required")),
+    activeProv && el("div", { class: "muted", style: "margin-top:3px" }, activeProv.docs_hint),
+    el("div", { class: "meta-line", style: "margin-top:6px" }, keySummary));
+
+  /* Local runtime & models */
+  fill($("aLocal"),
+    el("div", {}, el("b", {}, a.local.model || "No local model selected"), " via " + a.local.provider + " · cap " + a.local.max_params_b + "B · runtime ",
+      el("span", { class: "st " + (a.ollama === "running" ? "t-ok" : "t-warn") }, a.ollama)),
+    a.ollama !== "running" && a.local.provider === "ollama"
+      ? el("div", { class: "note" }, "Ollama is not reachable at " + a.local.endpoint + ". Start Ollama or switch to a standalone GGUF model below.")
+      : null);
+
+  fill($("mTable"), table(["Installed model", "Parameters", "Size", "Status"], (a.models || []).map(m => el("tr", {},
+    el("td", {}, el("b", {}, m.name), m.loaded ? [" · ", el("span", { class: "st t-ok" }, "loaded")] : null),
+    el("td", { class: "num" }, m.params || "?", m.params_b > a.local.max_params_b ? [" · ", el("span", { class: "st t-warn" }, "over limit")] : null),
+    el("td", { class: "num" }, m.size_mb + " MB"),
+    el("td", {}, m.name === a.local.model
+      ? el("span", { class: "st t-ok" }, "active")
+      : el("button", { class: "b sm", disabled: m.params_b > a.local.max_params_b ? "" : false, on: { click: e => act(() => api("/api/ai", { action: "use", name: m.name }), "Using " + m.name, e.target) } }, "Use")))),
+    "No local Ollama models installed yet."));
+
+  fill($("gTable"), table(["Stored GGUF", "Parameters", "Size", "Source", ""], (a.stored || []).map(m => el("tr", {},
+    el("td", {}, el("b", {}, m.name)),
+    el("td", { class: "num" }, m.params_b.toFixed(2) + "B"),
+    el("td", { class: "num" }, m.size_mb + " MB"),
+    el("td", {}, m.source),
+    el("td", {}, el("div", { class: "row-tight" },
+      m.path === a.local.model_path
+        ? el("span", { class: "st t-ok" }, "active")
+        : el("button", { class: "b sm", on: { click: e => act(() => api("/api/ai", { action: "use-stored", name: m.name }), "Using " + m.name, e.target) } }, "Use"),
+      el("button", { class: "b sm d", on: { click: async e => {
+        if (await askConfirm("Remove stored model", "Delete " + m.name + " from the local model store?", "Delete", true)) {
+          act(() => api("/api/ai", { action: "remove-stored", name: m.name }), "Removed", e.target);
+        }
+      } } }, "Delete"))))),
+    "No GGUF models in store yet."));
+
   dlState(a.download);
-  if (!$("mRec").options.length) fill($("mRec"), a.recommended.map(m => el("option", { value: m.Model }, m.Model + " — " + m.Params + ", " + m.About)));
-  fill($("aCloud"), el("div", {}, el("b", {}, a.cloud.model), " · ", el("span", { class: "tag " + (a.cloud_key_set ? "ok" : "warn") }, a.cloud_key_set ? "API key stored (encrypted)" : "no API key")));
-  fill($("aVT"), el("div", {}, el("b", {}, "VirusTotal"), " · ", el("span", { class: "tag " + (a.vt_key_set ? "ok" : "") }, a.vt_key_set ? "key stored" : "not configured")));
+  if (!$("mRec").options.length) {
+    fill($("mRec"), (a.recommended || []).map(m => el("option", { value: m.Model }, m.Model + " — " + m.Params + ", " + m.About)));
+  }
+  fill($("aVT"), el("div", {}, el("b", {}, "VirusTotal"), " · ", el("span", { class: "st " + (a.vt_key_set ? "t-ok" : "t-muted") }, a.vt_key_set ? "key stored" : "not configured")));
 }
+
 $("aMode").onchange = e => act(() => api("/api/ai", { action: "mode", value: e.target.value }), "AI mode updated");
+$("aSens").onchange = e => act(() => api("/api/ai", { action: "sensitivity", value: e.target.value }), "AI sensitivity updated");
+$("bThr").onclick = e => act(() => api("/api/settings", { action: "set", key: "ai.confidence_threshold", value: $("aThr").value }), "Conviction threshold saved", e.target);
+$("cProv").onchange = e => act(() => api("/api/ai", { action: "cloud-provider", value: e.target.value }), "Cloud provider switched");
+$("cModSel").onchange = e => { $("cModCustom").value = e.target.value; act(() => api("/api/ai", { action: "cloud-model", value: e.target.value }), "Cloud model updated"); };
+$("bCMod").onclick = e => act(() => api("/api/ai", { action: "cloud-model", value: $("cModCustom").value.trim() }), "Cloud model saved", e.target);
+$("bCEndpoint").onclick = e => act(() => api("/api/ai", { action: "cloud-endpoint", value: $("cEndpoint").value.trim() }), "Custom endpoint saved", e.target);
+$("bKey").onclick = e => act(() => api("/api/ai", { action: "set-key", name: $("cProv").value, key: $("kCloud").value }), "API key encrypted & stored", e.target).then(() => { $("kCloud").value = ""; });
+$("bKeyClr").onclick = async e => {
+  if (await askConfirm("Remove API key", "Remove the stored API key for " + $("cProv").value + "?", "Remove key", true)) {
+    act(() => api("/api/ai", { action: "clear-key", name: $("cProv").value }), "API key removed", e.target);
+  }
+};
 $("aShare").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.cloud.share_snippets", value: String(e.target.checked) }), "Saved");
+$("aCpuOnly").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.local.cpu_only", value: String(e.target.checked) }), "Local inference mode saved");
+
 let dlTimer = null;
 function dlState(d) {
+  if (!d) return;
   $("bHFCancel").hidden = !d.running;
   if (d.running) {
     const pct = d.total ? Math.floor(d.done * 100 / d.total) : 0;
@@ -413,65 +1200,149 @@ function dlState(d) {
     $("hProg").textContent = d.error ? "Download failed: " + d.error : (d.result || "");
   }
 }
-$("bHFSearch").onclick = async e => {
-  try { const r = await api("/api/ai", { action: "hf-search", value: $("hQ").value.trim() });
-    fill($("hRes"), table(["Repository", "Downloads", "Size", ""], r.map(m => el("tr", {}, el("td", {}, el("b", {}, m.id), m.gated ? [" ", el("span", { class: "tag warn" }, "gated")] : null), el("td", {}, m.downloads.toLocaleString()),
-      el("td", {}, m.params_b ? m.params_b.toFixed(1) + "B" : "?"), el("td", {}, el("button", { class: "b", on: { click: () => { $("hRef").value = m.id; } } }, "Pick")))), "No GGUF repositories found."));
-  } catch (err) { toast(err.message); }
+$("bHFSearch").onclick = async () => {
+  try {
+    const r = await api("/api/ai", { action: "hf-search", value: $("hQ").value.trim() });
+    fill($("hRes"), el("div", { class: "tablewrap", style: "margin:8px 0" },
+      table(["Repository", "Downloads", "Params", ""], r.map(m => el("tr", {},
+        el("td", {}, el("b", {}, m.id), m.gated ? [" · ", el("span", { class: "st t-warn" }, "gated")] : null),
+        el("td", { class: "num" }, (m.downloads || 0).toLocaleString()),
+        el("td", { class: "num" }, m.params_b ? m.params_b.toFixed(1) + "B" : "?"),
+        el("td", {}, el("button", { class: "b sm", on: { click: () => { $("hRef").value = m.id; } } }, "Select")))),
+        "No GGUF repositories found.")));
+  } catch (err) { toast(err.message, true); }
 };
 $("bHFGet").onclick = e => act(async () => { await api("/api/ai", { action: "hf-get", name: $("hRef").value.trim() }); dlState((await api("/api/ai")).download); }, "Download started", e.target);
-$("bHFCancel").onclick = e => act(() => api("/api/ai", { action: "hf-cancel" }), "Cancelling", e.target);
-$("bImpGguf").onclick = e => act(() => api("/api/ai", { action: "import", path: $("iGguf").value.trim() }), r => "Imported (" + r.params_b.toFixed(2) + "B parameters)", e.target).then(() => aiTab());
-$("bHFTok").onclick = e => act(() => api("/api/ai", { action: "hf-token", key: $("kHF").value }), "Token saved", e.target).then(() => $("kHF").value = "");
-$("bPull").onclick = e => { toast("Downloading " + $("mRec").value + " — this can take a few minutes"); act(() => api("/api/ai", { action: "pull", name: $("mRec").value }), r => "Model ready (" + r.params_b.toFixed(2) + "B parameters)", e.target); };
+$("bHFCancel").onclick = e => act(() => api("/api/ai", { action: "hf-cancel" }), "Cancelling download", e.target);
+$("bImpGguf").onclick = e => act(() => api("/api/ai", { action: "import", path: $("iGguf").value.trim() }), r => "Imported (" + r.params_b.toFixed(2) + "B parameters)", e.target);
+$("bHFTok").onclick = e => act(() => api("/api/ai", { action: "hf-token", key: $("kHF").value }), "Token saved", e.target).then(() => { $("kHF").value = ""; });
+$("bPull").onclick = e => { toast("Pulling " + $("mRec").value + "…"); act(() => api("/api/ai", { action: "pull", name: $("mRec").value }), r => "Model ready (" + r.params_b.toFixed(2) + "B parameters)", e.target); };
 $("bGguf").onclick = e => act(() => api("/api/ai", { action: "gguf", path: $("gPath").value.trim() }), r => "Using GGUF model (" + r.params_b.toFixed(2) + "B parameters)", e.target);
-$("bKey").onclick = e => act(() => api("/api/ai", { action: "set-key", key: $("kAnth").value }), "API key stored", e.target).then(() => $("kAnth").value = "");
-$("bKeyClr").onclick = e => act(() => api("/api/ai", { action: "clear-key" }), "API key removed", e.target);
-$("bVT").onclick = e => act(() => api("/api/ai", { action: "vt-key", key: $("kVT").value }), "Saved", e.target).then(() => $("kVT").value = "");
+$("bVT").onclick = e => act(() => api("/api/ai", { action: "vt-key", key: $("kVT").value }), "VirusTotal key saved", e.target).then(() => { $("kVT").value = ""; });
+
 $("bTest").onclick = async e => {
   fill($("aTest"), el("div", { class: "bar" }, el("i")));
   const r = await act(() => api("/api/ai", { action: "test" }), null, e.target);
-  fill($("aTest"), (r || []).map(t => el("div", { class: "note" }, el("b", {}, t.provider + " " + t.model + ": "), t.ok ? t.verdict.verdict + " (" + Math.round(t.verdict.confidence * 100) + "%) in " + t.seconds + "s — " + (t.verdict.reasons || []).join("; ") : "failed — " + t.error)));
+  fill($("aTest"), (r || []).map(t => el("div", { class: "ai-box" },
+    el("div", { class: "ai-head" },
+      el("b", {}, t.provider + " / " + t.model),
+      t.ok
+        ? [verdictLabel(t.verdict.verdict), el("span", { class: "meta-line" }, Math.round(t.verdict.confidence * 100) + "% · " + t.seconds + "s" + (t.verdict.category ? " · " + t.verdict.category : ""))]
+        : el("span", { class: "st t-bad" }, "failed")),
+    t.ok
+      ? el("div", { class: "muted" }, t.verdict.summary || (t.verdict.reasons || []).join("; "))
+      : el("div", { class: "t-bad" }, t.error))));
 };
 
+/* BEHAVIOUR */
 async function behaviour(s) {
   const b = s.behavior;
-  fill($("bCards"), card("State", s.behavior_learning ? "Learning" : "Watching", s.behavior_learning ? "Everything seen now counts as normal" : "Unfamiliar activity is scored"), card("Programs known", b.executables), card("Launch pairs", b.parent_child_edges, "who starts whom"), card("File changes", "~" + b.typical_file_changes_per_10s + " / 10 s", "typical rate in your folders"));
-  const evs = (await api("/api/events?n=600")).filter(e => e.type === "anomaly").slice(0, 60);
-  fill($("anTable"), table(["When", "Score", "What happened"], evs.map(e => { const a = e.data || {}; return el("tr", {}, el("td", {}, when(e.time)), el("td", {}, el("span", { class: "tag " + (a.score >= 80 ? "bad" : "warn") }, a.score || "")),
-    el("td", {}, el("div", { class: "path" }, a.exe || a.kind || ""), (a.reasons || []).map(r => el("div", { class: "find" }, r)), a.cmdline ? el("div", { class: "find path" }, a.cmdline) : null)); }), "No anomalies recorded."));
+  fill($("bCards"),
+    card("Guard state", s.behavior_learning ? "Learning" : "Enforcing", s.behavior_learning ? "Recording baseline behaviour" : "Scoring unfamiliar launches & bursts"),
+    card("Known programs", b.executables.toLocaleString()),
+    card("Launch pairs", b.parent_child_edges.toLocaleString(), "parent -> child relationships"),
+    card("Typical file rate", "~" + b.typical_file_changes_per_10s + " / 10s", "normal write cadence"));
+  cachedAnomalies = (await api("/api/events?n=600")).filter(e => e.type === "anomaly").slice(0, 80);
+  renderAnomalies();
 }
-$("bLearn").onclick = e => act(() => api("/api/settings", { action: "learn", days: 3 }), "Learning for 3 days", e.target);
-$("bLearnStop").onclick = e => act(() => api("/api/settings", { action: "stop-learning" }), "Learning stopped", e.target);
-$("bBehReset").onclick = e => { if (confirm("Forget everything learned about normal activity on this PC?")) act(() => api("/api/settings", { action: "behavior-reset" }), "Baseline cleared", e.target); };
+function renderAnomalies() {
+  const q = $("bFilter").value.trim().toLowerCase();
+  const list = cachedAnomalies.filter(e => {
+    if (!q) return true;
+    const a = e.data || {};
+    return ((a.exe || "") + " " + (a.parent || "") + " " + (a.cmdline || "") + " " + (a.reasons || []).join(" ")).toLowerCase().includes(q);
+  });
+  fill($("anTable"), table(["When", "Score", "Process & Lineage"], list.map(e => {
+    const a = e.data || {};
+    return el("tr", {},
+      el("td", { class: "num", style: "white-space:nowrap" }, when(e.time)),
+      el("td", { class: "num" }, el("span", { class: "st " + ((a.score || 0) >= 80 ? "t-bad" : "t-warn") }, a.score || "")),
+      el("td", {},
+        el("div", { class: "path" }, a.exe || a.kind || e.message),
+        a.parent && el("div", { class: "meta-line" }, "Parent: " + a.parent + (a.pid ? " · PID " + a.pid : "")),
+        (a.reasons || []).map(r => el("div", { class: "find" }, r)),
+        a.cmdline ? el("div", { class: "find path" }, a.cmdline) : null));
+  }), "No behavioural anomalies recorded."));
+}
+$("bFilter").addEventListener("input", renderAnomalies);
+$("bLearn").onclick = e => act(() => api("/api/settings", { action: "learn", days: 3 }), "Learning mode enabled for 3 days", e.target);
+$("bLearnStop").onclick = e => act(() => api("/api/settings", { action: "stop-learning" }), "Learning stopped — enforcing baseline", e.target);
+$("bBehReset").onclick = async e => {
+  if (await askConfirm("Forget behaviour baseline", "Clear everything Visionary has learned about normal programs and launch pairs on this PC?", "Forget baseline", true)) {
+    act(() => api("/api/settings", { action: "behavior-reset" }), "Behaviour baseline cleared", e.target);
+  }
+};
 
+/* SETTINGS */
 async function settingsTab() {
   const r = await api("/api/settings"), c = r.config;
   requirePw = c.security.require_password_to_disable;
-  $("sProfile").value = c.profile; $("sGame").value = c.game_mode.forced ? "on" : c.game_mode.auto ? "auto" : "off"; $("sUser").textContent = r.user;
-  const toggles = [["realtime.auto_quarantine", c.realtime.auto_quarantine, "Quarantine malicious files automatically", "Off: detections are reported and left in place."],
-    ["behavior.enabled", c.behavior.enabled, "Watch program behaviour", "Scores unusual process launches and file-change bursts."],
-    ["windows.defender_second_opinion", c.windows.defender_second_opinion, "Ask Microsoft Defender about suspicious files", "Uses AMSI and a Defender custom scan as a second opinion."],
-    ["scan.scan_archives", c.scan.scan_archives, "Look inside zip archives", "Also covers Office documents, jars and other zip-based files."],
-    ["scan.use_cache", c.scan.use_cache, "Skip files unchanged since their last clean scan", "Cleared automatically when definitions change."],
-    ["security.require_password_to_disable", c.security.require_password_to_disable, "Require the computer password to disable protection", "Stops someone at your keyboard, or a script, from switching it off."]];
-  fill($("sToggles"), toggles.map(([key, val, name, help]) => el("div", { class: "row" }, el("label", { class: "chk", style: "color:var(--text)" }, el("input", Object.assign({ type: "checkbox", on: { change: e => act(() => api("/api/settings", { action: "set", key, value: String(e.target.checked) }), "Saved") } }, val ? { checked: "" } : {})), name), el("span", { class: "muted" }, help))),
+  $("sProfile").value = c.profile;
+  $("sGame").value = c.game_mode.forced ? "on" : c.game_mode.auto ? "auto" : "off";
+  $("sUser").textContent = r.user;
+  const toggles = [
+    ["realtime.auto_quarantine", c.realtime.auto_quarantine, "Quarantine malicious files automatically", "Off: detections are logged and left in place."],
+    ["behavior.enabled", c.behavior.enabled, "Monitor program behaviour & LOLBin chains", "Scores unusual parent-child launches and rapid file-change bursts."],
+    ["windows.defender_second_opinion", c.windows.defender_second_opinion, "Ask Microsoft Defender about suspicious files", "Uses AMSI and Defender custom scan as a second opinion."],
+    ["scan.scan_archives", c.scan.scan_archives, "Inspect inside zip archives", "Also covers Office OpenXML documents, JARs and zip containers."],
+    ["scan.use_cache", c.scan.use_cache, "Skip files unchanged since their last clean scan", "Automatically invalidated whenever definitions update."],
+    ["security.require_password_to_disable", c.security.require_password_to_disable, "Require computer password to disable protection", "Prevents scripts or walk-up access from pausing protection."]
+  ];
+  fill($("sToggles"),
+    toggles.map(([key, val, name, help]) => el("div", { class: "row" },
+      el("label", { class: "chk", style: "color:var(--text)" },
+        el("input", Object.assign({ type: "checkbox", on: { change: e => act(() => api("/api/settings", { action: "set", key, value: String(e.target.checked) }), "Setting saved") } }, val ? { checked: "" } : {})),
+        name),
+      el("span", { class: "muted", style: "font-size:12.5px" }, help))),
     el("span", { class: "cli" }, "visionary settings set realtime.auto_quarantine false"));
-  fill($("sExcl"), (c.scan.excludes || []).length ? c.scan.excludes.map(x => el("div", { class: "row" }, el("span", { class: "path", style: "flex:1" }, x), el("button", { class: "b", on: { click: e => act(() => api("/api/settings", { action: "exclude-remove", value: x }), "Removed", e.target) } }, "Remove"))) : el("div", { class: "muted" }, "No exclusions." + (c.profile === "balanced" ? "" : " The " + c.profile + " profile adds real-time exclusions for known churn folders.")),
-    (c.allow.hashes || []).concat(c.allow.paths || []).map(x => el("div", { class: "row" }, el("span", { class: "tag ok" }, "allowed"), el("span", { class: "path", style: "flex:1" }, x), el("button", { class: "b", on: { click: e => act(() => api("/api/settings", { action: "allow-remove", value: x }), "Removed", e.target) } }, "Remove"))));
+
+  fill($("sExcl"),
+    (c.scan.excludes || []).length
+      ? c.scan.excludes.map(x => el("div", { class: "row" },
+          el("span", { class: "st t-muted" }, "exclude"),
+          el("span", { class: "path", style: "flex:1" }, x),
+          el("button", { class: "b sm", on: { click: e => act(() => api("/api/settings", { action: "exclude-remove", value: x }), "Removed", e.target) } }, "Remove")))
+      : el("div", { class: "muted" }, "No custom exclusions." + (c.profile === "balanced" ? "" : " The " + c.profile + " profile adds built-in real-time churn exclusions.")),
+    (c.allow.hashes || []).concat(c.allow.paths || []).map(x => el("div", { class: "row" },
+      el("span", { class: "st t-ok" }, "allowed"),
+      el("span", { class: "path", style: "flex:1" }, x),
+      el("button", { class: "b sm", on: { click: e => act(() => api("/api/settings", { action: "allow-remove", value: x }), "Removed", e.target) } }, "Remove"))));
 }
 $("sProfile").onchange = e => act(() => api("/api/settings", { action: "profile", value: e.target.value }), "Profile updated");
 $("sGame").onchange = e => act(() => api("/api/settings", { action: "gamemode", value: e.target.value }), "Game mode updated");
-$("bExcl").onclick = e => act(() => api("/api/settings", { action: "exclude-add", value: $("eNew").value.trim() }), "Added", e.target).then(() => $("eNew").value = "");
-$("bReset").onclick = e => { if (confirm("Reset settings to defaults?")) act(() => api("/api/settings", { action: "reset", password: $("rPw").value, all: $("rAll").checked }), "Settings reset", e.target).then(() => $("rPw").value = ""); };
+$("bExcl").onclick = e => act(() => api("/api/settings", { action: "exclude-add", value: $("eNew").value.trim() }), "Exclusion added", e.target).then(() => { $("eNew").value = ""; });
+$("bReset").onclick = async e => {
+  if (await askConfirm("Reset settings", "Restore default settings and clear cached scan results?" + ($("rAll").checked ? "\nAPI keys, behaviour baseline and activity log will also be removed." : ""), "Reset settings", true)) {
+    act(() => api("/api/settings", { action: "reset", password: $("rPw").value, all: $("rAll").checked }), "Settings reset", e.target).then(() => { $("rPw").value = ""; });
+  }
+};
 
+/* ACTIVITY */
 async function activity() {
-  const evs = await api("/api/events?n=300");
-  fill($("eTable"), table(["When", "", "Type", "Event"], evs.map(e => el("tr", {}, el("td", { style: "white-space:nowrap" }, when(e.time)), el("td", {}, el("span", { class: "tag " + (e.severity === "high" ? "bad" : e.severity === "warn" ? "warn" : "") }, e.severity)), el("td", {}, e.type), el("td", {}, e.message))), "Nothing has happened yet."));
+  cachedEvents = await api("/api/events?n=300");
+  renderActivity();
 }
+function renderActivity() {
+  const typ = $("eType").value;
+  const q = $("eSearch").value.trim().toLowerCase();
+  const list = cachedEvents.filter(e => (!typ || e.type === typ) && (!q || (e.type + " " + e.severity + " " + e.message).toLowerCase().includes(q)));
+  fill($("eTable"), table(["When", "Severity", "Type", "Event"], list.map(e => el("tr", {},
+    el("td", { class: "num", style: "white-space:nowrap" }, when(e.time)),
+    el("td", {}, el("span", { class: "st " + (e.severity === "high" ? "t-bad" : e.severity === "warn" ? "t-warn" : "t-muted") }, e.severity)),
+    el("td", { class: "meta-line" }, e.type),
+    el("td", {}, e.message))), "No matching events."));
+}
+$("eType").addEventListener("change", renderActivity);
+$("eSearch").addEventListener("input", renderActivity);
 
-api("/api/settings").then(r => { requirePw = r.config.security.require_password_to_disable; show("overview"); }).catch(e => { show("overview"); });
-setInterval(() => { if (!document.hidden && current !== "settings" && current !== "definitions" && current !== "ai" && document.activeElement.tagName !== "SELECT" && document.activeElement.tagName !== "INPUT") refresh(); }, 5000);
+/* Boot */
+api("/api/settings").then(r => { requirePw = r.config.security.require_password_to_disable; show("overview"); }).catch(() => { show("overview"); });
+setInterval(() => {
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (!document.hidden && current !== "settings" && current !== "definitions" && current !== "ai" && tag !== "SELECT" && tag !== "INPUT") {
+    refresh();
+  }
+}, 5000);
 </script>
 </body>
 </html>

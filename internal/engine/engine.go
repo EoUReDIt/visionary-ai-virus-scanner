@@ -56,11 +56,32 @@ type Finding struct {
 
 // AIVerdict is what an AI provider concluded from a Report.
 type AIVerdict struct {
-	Verdict    string   `json:"verdict"` // malicious | suspicious | benign | unknown
-	Confidence float64  `json:"confidence"`
-	Reasons    []string `json:"reasons"`
-	Provider   string   `json:"provider"`
-	Model      string   `json:"model"`
+	Verdict           string   `json:"verdict"` // malicious | suspicious | benign | unknown
+	Confidence        float64  `json:"confidence"`
+	Category          string   `json:"category,omitempty"`           // trojan | ransomware | infostealer | dropper | lolbin | pup | dual-use-tool | benign | unknown
+	RecommendedAction string   `json:"recommended_action,omitempty"` // quarantine | review | monitor | allow
+	Summary           string   `json:"summary,omitempty"`
+	Reasons           []string `json:"reasons"`
+	Provider          string   `json:"provider"`
+	Model             string   `json:"model"`
+	Cached            bool     `json:"cached,omitempty"`
+}
+
+// ProcessContext captures runtime lineage when a scan is triggered by a
+// process start or behavioural anomaly (critical for LOLBin / fileless triage).
+type ProcessContext struct {
+	PID     int    `json:"pid,omitempty"`
+	Parent  string `json:"parent,omitempty"`
+	Cmdline string `json:"cmdline,omitempty"`
+}
+
+// AIStats tracks live AI triage outcomes during this session.
+type AIStats struct {
+	Triaged   int64 `json:"triaged"`
+	Convicted int64 `json:"convicted"`
+	Cleared   int64 `json:"cleared"`
+	CacheHits int64 `json:"cache_hits"`
+	Errors    int64 `json:"errors"`
 }
 
 type Result struct {
@@ -98,12 +119,14 @@ func (r *Result) add(f Finding) {
 // up but are capped below the conviction threshold: a guess never carries
 // the weight of a known sample, it only earns a closer look.
 func (r *Result) compute() {
-	hard, heur := 0, 0
+	hard, heur, beh := 0, 0, 0
 	threat := ""
 	for _, f := range r.Findings {
 		switch f.Layer {
-		case "heuristic", "archive", "behavior":
+		case "heuristic", "archive":
 			heur += f.Score
+		case "behavior":
+			beh += f.Score
 		default:
 			if f.Score > hard {
 				hard, threat = f.Score, f.Name
@@ -113,15 +136,23 @@ func (r *Result) compute() {
 	if heur > heuristicCap {
 		heur = heuristicCap
 	}
+	// A trusted Authenticode signature discounts static heuristics (e.g. packed
+	// dev/game tools), but NEVER discounts live behavioural anomalies — that way
+	// fileless LOLBin abuse of signed Windows tools (powershell, mshta, cmd)
+	// still reaches the gray zone and AI triage.
 	if r.Trusted {
 		heur = heur * 3 / 10
 	}
 	if r.heurFactor > 0 {
 		heur = int(float64(heur) * r.heurFactor)
 	}
-	score := max(hard, heur)
-	if hard > 0 && heur > 0 {
-		score = min(100, hard+heur/4)
+	soft := heur + beh
+	if soft > heuristicCap {
+		soft = heuristicCap
+	}
+	score := max(hard, soft)
+	if hard > 0 && soft > 0 {
+		score = min(100, hard+soft/4)
 		// Heuristics can strengthen a conviction but not create one: a rule
 		// its author scored as "suspicious" stays in the gray zone.
 		if hard < MaliciousAt && score >= MaliciousAt {
@@ -157,13 +188,14 @@ func (r *Result) compute() {
 
 // Report is the evidence handed to the AI layer.
 type Report struct {
-	FileName string    `json:"file_name"`
-	Location string    `json:"location"`
-	Size     int64     `json:"size"`
-	SHA256   string    `json:"sha256"`
-	Score    int       `json:"engine_score"`
-	Findings []Finding `json:"engine_findings"`
-	Features Features  `json:"features"`
+	FileName string          `json:"file_name"`
+	Location string          `json:"location"`
+	Size     int64           `json:"size"`
+	SHA256   string          `json:"sha256"`
+	Score    int             `json:"engine_score"`
+	Findings []Finding       `json:"engine_findings"`
+	Features Features        `json:"features"`
+	Process  *ProcessContext `json:"process_context,omitempty"`
 }
 
 // SecondOpinion is Microsoft Defender as seen by the engine.
@@ -186,11 +218,18 @@ type Engine struct {
 	AI       func(ctx context.Context, rep *Report) (*AIVerdict, error)
 	GameMode func() bool
 
-	cacheMu sync.Mutex
-	cache   map[string]cacheEntry
-	dirty   bool
-	aiUsed  atomic.Int32
-	selfExe string
+	cacheMu   sync.Mutex
+	cache     map[string]cacheEntry
+	dirty     bool
+	aiCacheMu sync.Mutex
+	aiCache   map[string]*AIVerdict
+	aiUsed    atomic.Int32
+	aiTriaged atomic.Int64
+	aiConvict atomic.Int64
+	aiCleared atomic.Int64
+	aiHits    atomic.Int64
+	aiErrors  atomic.Int64
+	selfExe   string
 }
 
 type cacheEntry struct {
@@ -203,12 +242,13 @@ type Options struct {
 	Escalate   bool // let gray-zone files reach Defender / reputation / AI
 	Quarantine bool // move malicious files to quarantine
 	NoCache    bool
-	Describe   bool      // collect descriptive features even for clean files
-	Context    []Finding // extra evidence (e.g. behaviour anomalies) for this file
+	Describe   bool            // collect descriptive features even for clean files
+	Context    []Finding       // extra evidence (e.g. behaviour anomalies) for this file
+	Process    *ProcessContext // optional live process context for LOLBin triage
 }
 
 func New(cfg *config.Config, db *defs.DB) *Engine {
-	e := &Engine{Cfg: cfg, DB: db, cache: map[string]cacheEntry{}}
+	e := &Engine{Cfg: cfg, DB: db, cache: map[string]cacheEntry{}, aiCache: map[string]*AIVerdict{}}
 	e.selfExe, _ = os.Executable()
 	if cfg.Scan.UseCache {
 		if f, err := os.Open(cachePath()); err == nil {
@@ -263,6 +303,17 @@ func (e *Engine) Flush() {
 
 // ResetBudget starts a new AI budget (call once per scan job).
 func (e *Engine) ResetBudget() { e.aiUsed.Store(0) }
+
+// AIStats returns a snapshot of session AI triage counts.
+func (e *Engine) AIStats() AIStats {
+	return AIStats{
+		Triaged:   e.aiTriaged.Load(),
+		Convicted: e.aiConvict.Load(),
+		Cleared:   e.aiCleared.Load(),
+		CacheHits: e.aiHits.Load(),
+		Errors:    e.aiErrors.Load(),
+	}
+}
 
 func (e *Engine) maxBytes() int64 {
 	mb := e.Cfg.Scan.MaxFileSizeMB
@@ -394,8 +445,12 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 		}
 	}
 
-	if opt.Escalate && res.Verdict == Suspicious && ctx.Err() == nil {
-		e.escalate(ctx, path, data, res)
+	shouldEscalate := res.Verdict == Suspicious
+	if !shouldEscalate && e.Cfg.AI.Sensitivity == "proactive" && !res.Trusted && res.Score >= 25 && isRiskyLocation(locationClass(path)) {
+		shouldEscalate = true
+	}
+	if opt.Escalate && shouldEscalate && ctx.Err() == nil {
+		e.escalate(ctx, path, data, res, opt.Process, opt.NoCache)
 	}
 
 	switch res.Verdict {
@@ -469,7 +524,7 @@ func (e *Engine) analyze(data []byte, name string, res *Result, depth int, top b
 
 // escalate asks the slower layers about a gray-zone file, stopping as soon
 // as one of them settles it.
-func (e *Engine) escalate(ctx context.Context, path string, data []byte, res *Result) {
+func (e *Engine) escalate(ctx context.Context, path string, data []byte, res *Result, proc *ProcessContext, noCache bool) {
 	gaming := e.GameMode != nil && e.GameMode()
 
 	if e.Defender != nil && e.Cfg.Windows.DefenderSecondOpinion {
@@ -513,32 +568,89 @@ func (e *Engine) escalate(ctx context.Context, path string, data []byte, res *Re
 	if e.AI == nil || gaming {
 		return
 	}
-	budget := e.Cfg.Scan.AIBudget
-	if budget <= 0 {
-		budget = 20
+
+	// Check the in-memory SHA-256 AI verdict cache when there is no unique
+	// runtime command-line context attached and caching is allowed.
+	cacheKey := res.SHA256
+	if noCache || (proc != nil && (proc.Cmdline != "" || proc.Parent != "")) {
+		cacheKey = ""
 	}
-	if int(e.aiUsed.Add(1)) > budget {
-		res.add(Finding{"ai", "ai-budget-exhausted", 0, "AI review skipped: per-scan budget reached"})
-		return
+	var v *AIVerdict
+	if cacheKey != "" {
+		e.aiCacheMu.Lock()
+		if cached, ok := e.aiCache[cacheKey]; ok {
+			cp := *cached
+			cp.Cached = true
+			v = &cp
+		}
+		e.aiCacheMu.Unlock()
 	}
-	v, err := e.AI(ctx, e.BuildReport(path, res))
-	if err != nil {
-		res.add(Finding{"ai", "ai-unavailable", 0, err.Error()})
-		return
+	if v != nil {
+		e.aiHits.Add(1)
+	} else {
+		budget := e.Cfg.Scan.AIBudget
+		if budget <= 0 {
+			budget = 20
+		}
+		if int(e.aiUsed.Add(1)) > budget {
+			res.add(Finding{"ai", "ai-budget-exhausted", 0, "AI review skipped: per-scan budget reached"})
+			return
+		}
+		rep := e.BuildReport(path, res)
+		rep.Process = proc
+		var err error
+		v, err = e.AI(ctx, rep)
+		if err != nil {
+			e.aiErrors.Add(1)
+			res.add(Finding{"ai", "ai-unavailable", 0, err.Error()})
+			return
+		}
+		e.aiTriaged.Add(1)
+		if cacheKey != "" {
+			e.aiCacheMu.Lock()
+			if e.aiCache == nil || len(e.aiCache) > 2048 {
+				e.aiCache = map[string]*AIVerdict{}
+			}
+			cp := *v
+			e.aiCache[cacheKey] = &cp
+			e.aiCacheMu.Unlock()
+		}
 	}
+
 	res.AI = v
+	thr := e.Cfg.AI.ConfidenceThreshold
+	if thr < 0.5 || thr > 0.99 {
+		thr = 0.80
+	}
 	why := strings.Join(v.Reasons, "; ")
+	if why == "" && v.Summary != "" {
+		why = v.Summary
+	}
 	switch {
-	case v.Verdict == "malicious" && v.Confidence >= 0.8:
-		res.add(Finding{"ai", "AI.Malicious", MaliciousAt, fmt.Sprintf("%s (%s, confidence %.0f%%)", why, v.Model, v.Confidence*100)})
-	case v.Verdict == "benign" && v.Confidence >= 0.8:
+	case v.Verdict == "malicious" && v.Confidence >= thr:
+		e.aiConvict.Add(1)
+		name := "AI.Malicious"
+		if v.Category != "" && v.Category != "unknown" && v.Category != "benign" {
+			name = "AI." + strings.ToUpper(v.Category[:1]) + v.Category[1:]
+		}
+		res.add(Finding{"ai", name, MaliciousAt, fmt.Sprintf("%s (%s, confidence %.0f%%)", why, v.Model, v.Confidence*100)})
+	case v.Verdict == "benign" && v.Confidence >= thr:
 		// The model may clear a heuristic guess, never hard evidence.
+		e.aiCleared.Add(1)
 		res.scoreCap = SuspiciousAt - 5
 		res.add(Finding{"ai", "ai-cleared", 0, fmt.Sprintf("%s (%s, confidence %.0f%%)", why, v.Model, v.Confidence*100)})
 	default:
 		res.add(Finding{"ai", "ai-inconclusive", 0, fmt.Sprintf("%s: %s (%s, confidence %.0f%%)", v.Verdict, why, v.Model, v.Confidence*100)})
 	}
 	res.compute()
+}
+
+func isRiskyLocation(loc string) bool {
+	switch loc {
+	case "downloads folder", "temp folder", "startup folder", "desktop":
+		return true
+	}
+	return false
 }
 
 func (e *Engine) BuildReport(path string, res *Result) *Report {
