@@ -99,7 +99,7 @@ func TestEscalationAndAI(t *testing.T) {
 	e.AI = func(context.Context, *Report) (*AIVerdict, error) {
 		return &AIVerdict{Verdict: "benign", Confidence: 0.9, Model: "test"}, nil
 	}
-	weird := put(t, dir, "setup.pdf.exe", []byte(strings.Repeat("x", 100)+" -windowstyle hidden"))
+	weird := put(t, dir, "setup.pdf.exe", []byte(strings.Repeat("A", 1600)+" -windowstyle hidden"))
 	if r := e.ScanFile(ctx, weird, Options{Escalate: true}); r.Verdict != Clean {
 		t.Errorf("AI clearance: %s score %d %v", r.Verdict, r.Score, r.Findings)
 	}

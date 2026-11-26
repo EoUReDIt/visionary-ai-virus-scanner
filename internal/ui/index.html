@@ -838,7 +838,8 @@ async function refresh() {
   } catch (e) { toast(e.message, true); return; }
   const s = status;
   $("brandMark").className = "brand-mark" + (s.protection ? "" : " off");
-  $("brandSub").textContent = (s.edition === "lite" ? "Lite Edition" : "AI Protection") + (s.game_mode ? " · Game mode" : "");
+  const edLabel = s.edition === "lite" ? "Lite Edition" : s.edition === "safe" ? "Safe Edition" : "Core AI Protection";
+  $("brandSub").textContent = edLabel + (s.game_mode ? " · Game mode" : "");
   $("topMeta").textContent = (s.protection ? "Protected" : "Paused") + " · AI " + (s.ai_mode || "off") + (s.ai_sensitivity ? " (" + s.ai_sensitivity + ")" : "");
   fill($("foot"),
     el("div", { class: "num" }, "v" + s.version + " · " + (s.profile || "balanced")),

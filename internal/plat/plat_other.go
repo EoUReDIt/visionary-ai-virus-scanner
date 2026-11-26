@@ -160,3 +160,6 @@ func (w *pollWatcher) loop(roots []string) {
 
 // EnableANSI reports whether the terminal understands colour escapes.
 func EnableANSI() bool { return true }
+
+// UpdateSystemPath is Windows-only.
+func UpdateSystemPath(string, bool) error { return ErrUnsupported }

@@ -376,3 +376,43 @@ func EnableANSI() bool {
 	}
 	return windows.SetConsoleMode(h, mode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING) == nil
 }
+
+// UpdateSystemPath adds or removes dir from the machine-wide PATH registry
+// value (REG_EXPAND_SZ) directly via Win32 APIs, avoiding PowerShell spawns
+// during installation/uninstallation and avoiding NSIS's 1024-char string cap.
+func UpdateSystemPath(dir string, add bool) error {
+	dir = strings.TrimRight(strings.TrimSpace(dir), `\`)
+	if dir == "" {
+		return errors.New("directory is required")
+	}
+	const envKey = `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, envKey, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf("opening machine environment key (run as administrator): %w", err)
+	}
+	defer k.Close()
+
+	cur, _, err := k.GetStringValue("Path")
+	if err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return err
+	}
+	var kept []string
+	found := false
+	for _, entry := range strings.Split(cur, ";") {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimRight(trimmed, `\`), dir) {
+			found = true
+			if !add {
+				continue
+			}
+		}
+		kept = append(kept, trimmed)
+	}
+	if add && !found {
+		kept = append(kept, dir)
+	}
+	return k.SetExpandStringValue("Path", strings.Join(kept, ";"))
+}

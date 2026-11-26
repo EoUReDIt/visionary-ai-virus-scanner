@@ -15,21 +15,29 @@ Usually because they were obtained without the Mark of the Web: `go install` / b
 `winget`, `scoop` or Chocolatey, a `.zip` extracted by a tool that does not propagate the mark, or a
 signed release that already had reputation. A browser-downloaded unsigned installer will still warn.
 
-## What this repository does
-- Builds with `-trimpath` and stripped symbols.
-- `scripts/sign.ps1` Authenticode-signs the binaries *before* they are packed into the installer, then
-  signs the installer, when a certificate is supplied. Without one it does nothing. CI proves the
-  pipeline with a throwaway self-signed certificate on every run.
-- `release.yml` runs `go vet`, unit tests (full + lite), builds, smoke-tests the produced binaries,
-  generates `SHA256SUMS.txt`, and publishes **both** distribution formats by default (configurable via
-  `package_format: both | nsis | exe` in `workflow_dispatch`):
-  - **NSIS Installers (Recommended for full protection):** `Visionary-Setup-x.y.z.exe` and
-    `Visionary-Lite-Setup-x.y.z.exe` — install to `Program Files\Visionary`, register the real-time
-    Windows Service, configure Defender co-existence, add `visionary` to `PATH`, include Windows version
-    metadata, and provide silent (`/S`) & standard uninstall.
-  - **Standalone Portable `.exe`s (No install / CI / lower AV-stub friction):**
-    `VisionaryUI-x.y.z-windows-amd64.exe`, `visionary-x.y.z-windows-amd64.exe`, and
-    `visionary-lite-x.y.z-windows-amd64.exe` — run directly without admin elevation or NSIS wrappers.
+## Three Release Editions (Safe, Core, Lite)
+`scripts/build.ps1` and `.github/workflows/release.yml` build and publish three distinct Windows editions
+(configurable via `edition: all | safe | core | lite` and `package_format: both | nsis | exe` in `workflow_dispatch`):
+- **Safe (`-tags safe`)** — *Lowest Windows Security / Defender friction*: Dashboard + CLI + AI triage
+  (local `<3B` & multi-provider cloud) + gzipped YARA + hashes + Authenticode checks + baseline learning,
+  **without** plaintext malware-API/UAC-bypass/Defender-exclusion heuristic tables, LOLBin command regexes,
+  or Defender setting/PowerShell automation (`Visionary-Safe-Setup-x.y.z.exe`, `visionary-safe-x.y.z-windows-amd64.zip`).
+- **Core (default)** — *All features enabled*: Full AI Protection Dashboard + CLI + complete PE/script
+  heuristics + full LOLBin/behaviour guard + Microsoft Defender co-existence & passive-mode tools
+  (`Visionary-Core-Setup-x.y.z.exe`, `visionary-core-x.y.z-windows-amd64.zip`).
+- **Lite (`-tags lite`)** — *All detection features, minimal CPU/RAM*: Same full heuristic, LOLBin,
+  and Defender co-existence engine as Core in a CLI-only build with CPU-only local AI defaults
+  (`Visionary-Lite-Setup-x.y.z.exe`, `visionary-lite-x.y.z-windows-amd64.zip`).
+
+## What every build does to minimize Windows Security / Defender false positives
+- **Preserves Go symbols** (avoids `-s -w` stripping) and embeds genuine Windows PE `VERSIONINFO` metadata
+  plus a Windows 10/11 `asInvoker` application manifest into every `.exe` (`scripts/build.ps1`).
+- **Standard `zlib` NSIS compression** instead of `/SOLID lzma`, PowerShell-free native Win32 `PATH`
+  updates (`visionary path add|remove`), and upgrade-only `taskkill` guards (`installer/visionary.nsi`).
+- **Pre-release Microsoft Defender check:** `release.yml` scans `dist/` with `MpCmdRun.exe` on the
+  Windows runner so any static detection is surfaced immediately in the workflow log.
+- **Authenticode signing ready:** `scripts/sign.ps1` signs raw binaries before packaging and signs
+  all installers when a certificate is supplied, plus generates `SHA256SUMS.txt`.
 
 ## Options to get a real signature (pick one)
 | Option | Cost | Notes |

@@ -238,6 +238,18 @@ func main() {
 		msg, err := serviceCommand(need(pos, 0, "install, uninstall, start, stop or status"))
 		check(err)
 		ok("service %s", msg)
+	case "path":
+		pos := parse(fs, rest)
+		switch arg(pos, 0) {
+		case "add":
+			check(plat.UpdateSystemPath(need(pos, 1, "directory"), true))
+			ok("added %s to machine PATH", pos[1])
+		case "remove":
+			check(plat.UpdateSystemPath(need(pos, 1, "directory"), false))
+			ok("removed %s from machine PATH", pos[1])
+		default:
+			fail(errors.New("usage: visionary path add|remove <dir>"))
+		}
 	case "settings":
 		cmdSettings(a, fs, rest)
 	case "events":

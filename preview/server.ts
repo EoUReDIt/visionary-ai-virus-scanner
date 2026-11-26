@@ -100,7 +100,7 @@ const nowIso = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString();
 
 const state = {
   version: "0.2.0",
-  edition: "full",
+  edition: "core",
   protection: true,
   protection_reason: "enabled",
   guard_running: true,

@@ -3,6 +3,7 @@ package behavior
 import (
 	"testing"
 
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/plat"
 )
 
@@ -37,11 +38,13 @@ func TestProcessScoring(t *testing.T) {
 	if an := m.Observe(drop, explorer, false, 50); an == nil {
 		t.Error("anomaly became normal after one repeat")
 	}
-	// Universal rule: works even while learning.
-	discord := &plat.Proc{PID: 5, Exe: `C:\Users\sam\AppData\Local\Discord\Discord.exe`}
-	enc := plat.Proc{PID: 6, Exe: ps.Exe, Cmdline: "powershell -w hidden -enc " + "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9w"}
-	if an := m.Observe(enc, discord, true, 50); an == nil || an.Score < 80 {
-		t.Errorf("chat app spawning encoded PowerShell: %+v", an)
+	// Universal rule: works even while learning (Core and Lite editions).
+	if !edition.Safe {
+		discord := &plat.Proc{PID: 5, Exe: `C:\Users\sam\AppData\Local\Discord\Discord.exe`}
+		enc := plat.Proc{PID: 6, Exe: ps.Exe, Cmdline: "powershell -w hidden -enc " + "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9w"}
+		if an := m.Observe(enc, discord, true, 50); an == nil || an.Score < 80 {
+			t.Errorf("chat app spawning encoded PowerShell: %+v", an)
+		}
 	}
 }
 

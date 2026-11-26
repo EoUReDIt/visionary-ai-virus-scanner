@@ -1,13 +1,13 @@
 name: Release
 
-# Publishes Visionary Windows builds to a GitHub Release:
-#   - NSIS Installers (Recommended for everyday Windows protection: installs the
-#     real-time service, Defender co-existence, PATH, Start Menu & uninstaller)
-#   - Standalone Portable .exe binaries (Zero-install CLI/GUI for devs, gamers & CI)
-#   - SHA256SUMS.txt checksums for every uploaded binary
+# Publishes three Visionary Windows editions to a GitHub Release:
+#   - Safe : Dashboard + CLI + AI triage + YARA + hashes + certs + baseline learning,
+#            WITHOUT Defender-triggering heuristic strings or Defender setting changes
+#   - Core : All features (Dashboard + CLI + full PE/script heuristics + LOLBin guard + Defender co-existence)
+#   - Lite : All detection features in a minimal CPU-only CLI build (no dashboard)
 #
-# Runs automatically when you push a version tag like v0.2.0, or manually via
-# Actions -> Release -> Run workflow (where you can also pick both / nsis / exe).
+# Each edition ships as an NSIS Installer, Standalone Portable .exe, and Portable .zip + SHA256SUMS.txt.
+# Triggered on pushing a version tag (v0.2.0) or manually via Actions -> Release -> Run workflow.
 on:
   push:
     tags: ['v*']
@@ -16,8 +16,17 @@ on:
       tag:
         description: 'Version tag to publish, e.g. v0.2.0'
         required: true
+      edition:
+        description: 'Edition(s) to build and publish'
+        type: choice
+        default: all
+        options:
+          - all
+          - safe
+          - core
+          - lite
       package_format:
-        description: 'Artifacts to publish (both = NSIS installers + standalone portable .exe)'
+        description: 'Artifacts to publish (both = NSIS installers + portable .zip & .exe)'
         type: choice
         default: both
         options:
@@ -34,11 +43,12 @@ permissions:
 
 jobs:
   release:
-    name: Build, verify and publish Windows release
+    name: Build, verify and publish Windows release (Safe, Lite, Core)
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
+      EDITION: ${{ inputs.edition || 'all' }}
       PACKAGE_FORMAT: ${{ inputs.package_format || 'both' }}
       PRERELEASE: ${{ inputs.prerelease || false }}
     steps:
@@ -58,8 +68,8 @@ jobs:
         run: |
           choco install nsis -y --no-progress
           "C:\Program Files (x86)\NSIS" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-      # build.ps1 runs go vet & go test (full + lite), builds and optionally signs
-      # all executables, builds NSIS installers, and generates SHA256SUMS.txt.
+      # build.ps1 runs go vet & go test for each selected edition, embeds PE metadata,
+      # signs raw binaries, builds portable .exe/.zip and NSIS installers, and writes SHA256SUMS.txt.
       - name: Build release artifacts
         shell: pwsh
         env:
@@ -68,22 +78,48 @@ jobs:
           CODESIGN_TIMESTAMP_URL: ${{ secrets.CODESIGN_TIMESTAMP_URL }}
         run: |
           $ver = $env:TAG.Substring(1)
-          .\scripts\build.ps1 -Version $ver -PackageFormat $env:PACKAGE_FORMAT
+          .\scripts\build.ps1 -Version $ver -PackageFormat $env:PACKAGE_FORMAT -Edition $env:EDITION
       - name: Smoke test binaries before publishing
         shell: pwsh
         run: |
-          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-rel"
-          .\dist\visionary.exe version
-          .\dist\visionary.exe status
-          .\dist\visionary.exe ai status
-          .\dist\visionary.exe scan .\scripts --json | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Full edition smoke scan failed (exit $LASTEXITCODE)" }
-
-          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-rel-lite"
-          .\dist\visionary-lite.exe version
-          .\dist\visionary-lite.exe status
-          .\dist\visionary-lite.exe scan .\scripts --json | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Lite edition smoke scan failed (exit $LASTEXITCODE)" }
+          if ($env:EDITION -eq 'all' -or $env:EDITION -eq 'core') {
+            $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-core"
+            .\dist\visionary.exe version
+            .\dist\visionary.exe status
+            .\dist\visionary.exe ai status
+            .\dist\visionary.exe scan .\scripts --json | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Core edition smoke scan failed (exit $LASTEXITCODE)" }
+          }
+          if ($env:EDITION -eq 'all' -or $env:EDITION -eq 'lite') {
+            $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-lite"
+            .\dist\visionary-lite.exe version
+            .\dist\visionary-lite.exe status
+            .\dist\visionary-lite.exe scan .\scripts --json | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Lite edition smoke scan failed (exit $LASTEXITCODE)" }
+          }
+          if ($env:EDITION -eq 'all' -or $env:EDITION -eq 'safe') {
+            $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-safe"
+            .\dist\visionary-safe.exe version
+            .\dist\visionary-safe.exe status
+            .\dist\visionary-safe.exe ai status
+            .\dist\visionary-safe.exe scan .\scripts --json | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Safe edition smoke scan failed (exit $LASTEXITCODE)" }
+          }
+      - name: Check artifacts with Microsoft Defender (diagnostic)
+        shell: pwsh
+        run: |
+          $mp = Get-ChildItem "$env:ProgramData\Microsoft\Windows Defender\Platform\*\MpCmdRun.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $mp) { $mp = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" }
+          if (Test-Path $mp) {
+            & $mp -Scan -ScanType 3 -File (Resolve-Path dist).Path -DisableRemediation
+            if ($LASTEXITCODE -eq 2) {
+              Write-Warning "Microsoft Defender flagged one or more artifacts (exit 2). Submit to https://www.microsoft.com/wdsi/filesubmission and/or enable Authenticode signing."
+            } else {
+              Write-Host "Microsoft Defender local scan passed (exit $LASTEXITCODE)."
+            }
+          } else {
+            Write-Host "MpCmdRun.exe not present on runner; skipping Defender check."
+          }
       - name: Publish GitHub Release
         shell: pwsh
         env:
@@ -92,10 +128,11 @@ jobs:
           $ver = $env:TAG.Substring(1)
           $files = @()
           if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'nsis') {
-            $files += @(Get-ChildItem "dist\Visionary*Setup-$ver.exe" -ErrorAction SilentlyContinue | ForEach-Object FullName)
+            $files += @(Get-ChildItem "dist\Visionary-*-Setup-$ver.exe" -ErrorAction SilentlyContinue | ForEach-Object FullName)
           }
           if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'exe') {
             $files += @(Get-ChildItem "dist\*-$ver-windows-amd64.exe" -ErrorAction SilentlyContinue | ForEach-Object FullName)
+            $files += @(Get-ChildItem "dist\*-$ver-windows-amd64.zip" -ErrorAction SilentlyContinue | ForEach-Object FullName)
           }
           if (Test-Path "dist\SHA256SUMS.txt") {
             $files += (Resolve-Path "dist\SHA256SUMS.txt").Path
@@ -104,30 +141,57 @@ jobs:
 
           $notesFile = Join-Path $env:RUNNER_TEMP "release-notes.md"
           $notes = @()
-          $notes += "## Which download should I pick?"
+          $notes += "## Choose your Visionary edition"
           $notes += ""
-          if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'nsis') {
-            $notes += "### Windows Installer — NSIS (Recommended for full protection)"
-            $notes += "Installs to ``Program Files\Visionary``, registers the real-time Windows Service, configures Microsoft Defender co-existence exclusions, adds ``visionary`` to ``PATH``, and includes a clean Windows uninstaller."
-            $notes += "- **``Visionary-Setup-$ver.exe``** — Full edition (AI Protection Dashboard + CLI + Real-Time Guard)"
-            $notes += "- **``Visionary-Lite-Setup-$ver.exe``** — Lite CPU-only edition (no dashboard, low idle RAM/CPU)"
+          $notes += "| Edition | Dashboard & CLI | Local (<3B) & Cloud AI | YARA, Hashes & Certs | Full Heuristics, LOLBin & Defender Co-exist | Best for |"
+          $notes += "|---|---|---|---|---|---|"
+          $notes += "| **Safe** | Yes | Yes | Yes | Omitted (lowest Windows Security friction) | Easiest download & install alongside Microsoft Defender |"
+          $notes += "| **Core** | Yes | Yes | Yes | **All features enabled** | Full AI-powered real-time & LOLBin protection |"
+          $notes += "| **Lite** | CLI only | Yes (CPU-only default) | Yes | **All features enabled** | Gamers, low-RAM laptops & background service use |"
+          $notes += ""
+          if ($env:EDITION -eq 'all' -or $env:EDITION -eq 'safe') {
+            $notes += "### 1. Safe Edition (Lowest Windows Security friction)"
+            $notes += "Omits Defender-triggering PE/script heuristic string tables, LOLBin command regexes, and Defender exclusion/PowerShell modifications while keeping full AI triage, YARA, hashes, certificates, VirusTotal, and the Dashboard."
+            if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'nsis') {
+              $notes += "- **``Visionary-Safe-Setup-$ver.exe``** — Windows NSIS Installer"
+            }
+            if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'exe') {
+              $notes += "- **``visionary-safe-$ver-windows-amd64.zip``** — Portable ZIP (Dashboard + CLI)"
+              $notes += "- **``VisionaryUI-Safe-$ver-windows-amd64.exe``** / **``visionary-safe-$ver-windows-amd64.exe``** — Standalone executables"
+            }
             $notes += ""
           }
-          if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'exe') {
-            $notes += "### Standalone Portable Executables (.exe — No install required)"
-            $notes += "Run directly from any folder or CI runner with no installer or admin elevation needed for on-demand scans."
-            $notes += "- **``VisionaryUI-$ver-windows-amd64.exe``** — Portable Dashboard + Real-Time Guard"
-            $notes += "- **``visionary-$ver-windows-amd64.exe``** — Portable Full CLI"
-            $notes += "- **``visionary-lite-$ver-windows-amd64.exe``** — Portable Lite CPU-only CLI"
+          if ($env:EDITION -eq 'all' -or $env:EDITION -eq 'core') {
+            $notes += "### 2. Core Edition (All features — Full AI & LOLBin Protection)"
+            $notes += "Includes every detection layer: hashes, YARA, PE capability & script heuristics, LOLBin/behaviour monitoring, Microsoft Defender co-existence, local & cloud AI triage, and the Dashboard."
+            if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'nsis') {
+              $notes += "- **``Visionary-Core-Setup-$ver.exe``** — Windows NSIS Installer"
+            }
+            if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'exe') {
+              $notes += "- **``visionary-core-$ver-windows-amd64.zip``** — Portable ZIP (Dashboard + CLI)"
+              $notes += "- **``VisionaryUI-Core-$ver-windows-amd64.exe``** / **``visionary-core-$ver-windows-amd64.exe``** — Standalone executables"
+            }
+            $notes += ""
+          }
+          if ($env:EDITION -eq 'all' -or $env:EDITION -eq 'lite') {
+            $notes += "### 3. Lite Edition (All detection features — Low-Footprint CLI)"
+            $notes += "Carries the exact same full detection, heuristic, and behavioural engine as Core with no dashboard and CPU-only local AI defaults."
+            if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'nsis') {
+              $notes += "- **``Visionary-Lite-Setup-$ver.exe``** — Windows NSIS Installer"
+            }
+            if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'exe') {
+              $notes += "- **``visionary-lite-$ver-windows-amd64.zip``** — Portable ZIP (CLI)"
+              $notes += "- **``visionary-lite-$ver-windows-amd64.exe``** — Standalone executable"
+            }
             $notes += ""
           }
           $notes += "### Verify integrity (PowerShell)"
           $notes += '```powershell'
-          $notes += "Get-FileHash Visionary-Setup-$ver.exe -Algorithm SHA256"
+          $notes += "Get-FileHash Visionary-Safe-Setup-$ver.exe -Algorithm SHA256"
           $notes += '```'
           $notes += "Compare against ``SHA256SUMS.txt`` attached below."
           $notes += ""
-          $notes += "> **Windows SmartScreen:** Unsigned builds may show *Windows protected your PC* — click **More info -> Run anyway**, or verify the SHA-256 hash above."
+          $notes += "> **Windows SmartScreen:** Unsigned builds downloaded via a browser carry Windows' Mark of the Web and may display *Windows protected your PC* — click **More info -> Run anyway**, or use the portable ``.zip`` bundle and verify against ``SHA256SUMS.txt``."
           Set-Content -Path $notesFile -Value $notes -Encoding utf8
 
           $extra = @()

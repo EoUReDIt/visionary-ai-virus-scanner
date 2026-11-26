@@ -23,6 +23,8 @@ jobs:
       - run: go test ./...
       - run: go vet -tags lite ./... && GOOS=windows go vet -tags lite ./...
       - run: go test -tags lite ./internal/config ./internal/ai ./internal/app
+      - run: go vet -tags safe ./... && GOOS=windows go vet -tags safe ./...
+      - run: go test -tags safe ./...
       - name: Lite idle budget (guard memory and CPU)
         run: |
           go build -tags lite -o visionary-lite ./cmd/visionary
@@ -40,23 +42,23 @@ jobs:
         id: v
         shell: bash
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"; else echo "version=0.1.0-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"; fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"; else echo "version=0.2.0-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"; fi
       - name: Install NSIS
         shell: pwsh
         run: |
           choco install nsis -y --no-progress
           "C:\Program Files (x86)\NSIS" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-      - name: Build binaries and installer
+      - name: Build all editions (Core, Lite, Safe)
         shell: pwsh
         run: .\scripts\build.ps1 -Version "${{ steps.v.outputs.version }}"
-      - name: Smoke test
+      - name: Smoke test (Core)
         shell: pwsh
         run: |
-          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome"
+          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-core"
           .\dist\visionary.exe version
           .\dist\visionary.exe status
           .\dist\visionary.exe scan .\scripts .\dist --json | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "scan of the build output reported detections" }
+          if ($LASTEXITCODE -ne 0) { throw "core scan of the build output reported detections" }
       - name: Smoke test (Lite)
         shell: pwsh
         run: |
@@ -65,6 +67,14 @@ jobs:
           .\dist\visionary-lite.exe status
           .\dist\visionary-lite.exe scan .\scripts --json | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "lite scan reported detections" }
+      - name: Smoke test (Safe)
+        shell: pwsh
+        run: |
+          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-safe"
+          .\dist\visionary-safe.exe version
+          .\dist\visionary-safe.exe status
+          .\dist\visionary-safe.exe scan .\scripts --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "safe scan reported detections" }
       - name: Lite idle budget (Windows working set)
         shell: pwsh
         run: |
@@ -86,7 +96,7 @@ jobs:
           $env:CODESIGN_PFX_BASE64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx))
           $env:CODESIGN_PFX_PASSWORD = "ci-selftest"
           $copy = Join-Path $env:RUNNER_TEMP "signed-copy.exe"
-          Copy-Item dist\visionary.exe $copy
+          Copy-Item dist\visionary-safe.exe $copy
           .\scripts\sign.ps1 $copy
           if (-not (Get-AuthenticodeSignature $copy).SignerCertificate) { throw "self-test signature missing" }
       - uses: actions/upload-artifact@v4
@@ -96,5 +106,8 @@ jobs:
             dist/visionary.exe
             dist/VisionaryUI.exe
             dist/visionary-lite.exe
-            dist/Visionary-Setup-*.exe
-            dist/Visionary-Lite-Setup-*.exe
+            dist/visionary-safe.exe
+            dist/VisionaryUI-Safe.exe
+            dist/Visionary-*-Setup-*.exe
+            dist/visionary-*-windows-amd64.zip
+            dist/SHA256SUMS.txt
