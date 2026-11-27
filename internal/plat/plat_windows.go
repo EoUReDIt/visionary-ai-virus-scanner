@@ -5,6 +5,7 @@ package plat
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -491,4 +492,50 @@ func UpdateSystemPath(dir string, add bool) error {
 		kept = append(kept, dir)
 	}
 	return k.SetExpandStringValue("Path", strings.Join(kept, ";"))
+}
+
+// EnsureSharedDataDir creates dir and applies an inheritable Windows DACL
+// granting Full Control to SYSTEM and Administrators and Modify (0x1301bf) to
+// Authenticated Users / Builtin Users. Without this, files first created by
+// the LocalSystem service or elevated installer inside C:\ProgramData cannot
+// be replaced (renamed over) by a non-elevated VisionaryUI user session.
+func EnsureSharedDataDir(dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	// D: = DACL; OICI = Object+Container Inherit; FA = Full Control; 0x1301bf = Modify.
+	const sddl = "D:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;AU)(A;OICI;0x1301bf;;;BU)"
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	if err := windows.SetNamedSecurityInfo(
+		dir,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION,
+		nil, nil, dacl, nil,
+	); err != nil {
+		return err
+	}
+	// Repair any pre-existing files/subfolders (e.g. config.json created before upgrade).
+	_ = filepath.WalkDir(dir, func(p string, _ fs.DirEntry, walkErr error) error {
+		if walkErr != nil || p == dir {
+			return nil
+		}
+		_ = windows.SetNamedSecurityInfo(
+			p,
+			windows.SE_FILE_OBJECT,
+			windows.DACL_SECURITY_INFORMATION,
+			nil, nil, dacl, nil,
+		)
+		return nil
+	})
+	return nil
 }

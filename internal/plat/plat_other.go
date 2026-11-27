@@ -175,3 +175,11 @@ func ShowAlreadyRunningDialog(title, message string) bool {
 	_, _ = os.Stderr.WriteString(title + ": " + message + "\n")
 	return false
 }
+
+// EnsureSharedDataDir ensures the data directory exists on non-Windows systems.
+func EnsureSharedDataDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	return os.MkdirAll(dir, 0o755)
+}

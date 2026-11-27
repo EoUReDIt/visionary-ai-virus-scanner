@@ -6,6 +6,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
 	"os"
 	"path/filepath"
@@ -293,11 +294,58 @@ func ModTime() time.Time {
 }
 
 func WriteAtomic(path string, b []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, mode); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(tmp, mode)
+	}
+
+	// On Windows, a concurrent reader (e.g. the background guard service
+	// reloading config.json) can briefly cause os.Rename to return Access
+	// Denied or Sharing Violation. Retry briefly before falling back.
+	var renameErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		if renameErr = os.Rename(tmp, path); renameErr == nil {
+			cleanup = false
+			return nil
+		}
+		if runtime.GOOS != "windows" {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Windows fallback: if replacing via rename is blocked by an active reader
+	// handle or legacy file ACL, attempt an in-place write.
+	if runtime.GOOS == "windows" {
+		if err := os.WriteFile(path, b, mode); err == nil {
+			return nil
+		}
+		if errors.Is(renameErr, os.ErrPermission) {
+			return fmt.Errorf("%w (folder permissions need repair: restart the Visionary service or run Visionary once as Administrator)", renameErr)
+		}
+	}
+	return renameErr
 }
 
 // Active reports whether protection is on right now, applying the automatic

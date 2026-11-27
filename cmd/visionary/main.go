@@ -255,6 +255,7 @@ func main() {
 		pos := parse(fs, rest)
 		switch arg(pos, 0) {
 		case "add":
+			_ = plat.EnsureSharedDataDir(config.Dir())
 			check(plat.UpdateSystemPath(need(pos, 1, "directory"), true))
 			ok("added %s to machine PATH", pos[1])
 		case "remove":

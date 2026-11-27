@@ -13,6 +13,8 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/app"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/plat"
 )
 
 const serviceName = "VisionaryAV"
@@ -26,6 +28,9 @@ type guardService struct{ a *app.App }
 
 func (g *guardService) Execute(_ []string, req <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
 	status <- svc.Status{State: svc.StartPending}
+	// Ensure logged-in user sessions (VisionaryUI) can update config.json and
+	// manage quarantine/definitions alongside this LocalSystem service.
+	_ = plat.EnsureSharedDataDir(config.Dir())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -62,6 +67,7 @@ func serviceCommand(action string) (string, error) {
 	}
 	defer m.Disconnect()
 	if action == "install" {
+		_ = plat.EnsureSharedDataDir(config.Dir())
 		exe, err := os.Executable()
 		if err != nil {
 			return "", err
@@ -106,6 +112,7 @@ func serviceCommand(action string) (string, error) {
 		stop()
 		return "removed", s.Delete()
 	case "start":
+		_ = plat.EnsureSharedDataDir(config.Dir())
 		return "started", s.Start()
 	case "stop":
 		stop()
