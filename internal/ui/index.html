@@ -515,6 +515,21 @@ section.on{display:block}
           <div class="row">
             <label class="chk"><input type="checkbox" id="aCpuOnly"> CPU-only local inference (keeps GPU VRAM free for games and creative apps)</label>
           </div>
+          <div class="row">
+            <label class="fld">Auto-unload when idle
+              <select id="aKeepAlive" aria-label="Auto-unload local model when idle">
+                <option value="0s">Immediately after each scan (0s)</option>
+                <option value="30s">After 30 seconds idle</option>
+                <option value="1m">After 1 minute idle</option>
+                <option value="2m">After 2 minutes idle (Lite default)</option>
+                <option value="5m">After 5 minutes idle</option>
+                <option value="15m">After 15 minutes idle (Core default)</option>
+              </select>
+            </label>
+            <div style="margin-left:auto;align-self:flex-end">
+              <button class="b" id="bUnload">Unload model now</button>
+            </div>
+          </div>
           <div class="tablewrap" id="mTable" style="margin:10px 0"></div>
           <div class="row">
             <select id="mRec" aria-label="Recommended local model"></select>
@@ -524,7 +539,7 @@ section.on{display:block}
             <input type="text" id="gPath" placeholder="C:\models\model.gguf (served by llama-server)" aria-label="GGUF file path">
             <button class="b" id="bGguf">Use GGUF file</button>
           </div>
-          <span class="cli">visionary ai local pull qwen3:1.7b &nbsp;·&nbsp; visionary ai local gguf &lt;file&gt;</span>
+          <span class="cli">visionary settings set ai.local.keep_alive 0s &nbsp;·&nbsp; visionary ai local unload &nbsp;·&nbsp; visionary ai local pull qwen3:1.7b</span>
         </div>
 
         <h2>GGUF Model Store</h2>
@@ -1259,8 +1274,16 @@ async function aiTab() {
     el("div", { class: "meta-line", style: "margin-top:6px" }, keySummary));
 
   /* Local runtime & models */
+  const rawKA = (a.local.keep_alive || "").trim();
+  const effKA = rawKA === "0" ? "0s" : (rawKA || (a.local.cpu_only ? "2m" : "15m"));
+  const kaSel = $("aKeepAlive");
+  if (!Array.from(kaSel.options).some(o => o.value === effKA)) {
+    kaSel.appendChild(el("option", { value: effKA }, "Custom (" + effKA + ")"));
+  }
+  kaSel.value = effKA;
+  const kaLabel = effKA === "0s" ? "unloads right after each scan" : "auto-unloads after " + effKA + " idle";
   fill($("aLocal"),
-    el("div", {}, el("b", {}, a.local.model || "No local model selected"), " via " + a.local.provider + " · cap " + a.local.max_params_b + "B · runtime ",
+    el("div", {}, el("b", {}, a.local.model || "No local model selected"), " via " + a.local.provider + " · cap " + a.local.max_params_b + "B · " + kaLabel + " · runtime ",
       el("span", { class: "st " + (a.ollama === "running" ? "t-ok" : "t-warn") }, a.ollama)),
     a.ollama !== "running" && a.local.provider === "ollama"
       ? el("div", { class: "note" }, "Ollama is not reachable at " + a.local.endpoint + ". Start Ollama or switch to a standalone GGUF model below.")
@@ -1313,6 +1336,8 @@ $("bKeyClr").onclick = async e => {
 };
 $("aShare").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.cloud.share_snippets", value: String(e.target.checked) }), "Saved");
 $("aCpuOnly").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.local.cpu_only", value: String(e.target.checked) }), "Local inference mode saved");
+$("aKeepAlive").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.local.keep_alive", value: e.target.value }), e.target.value === "0s" ? "Model will unload right after each scan" : "Auto-unload timeout set to " + e.target.value);
+$("bUnload").onclick = e => act(() => api("/api/ai", { action: "unload" }), "Local model unloaded from memory", e.target);
 
 let dlTimer = null;
 function dlState(d) {

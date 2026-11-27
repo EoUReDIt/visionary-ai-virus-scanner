@@ -677,6 +677,8 @@ func (s *server) ai(r *http.Request) (any, error) {
 		return map[string]any{"params_b": p}, err
 	case "load":
 		return nil, s.a.LoadLocalModel(ctx, true)
+	case "unload":
+		return nil, s.a.LoadLocalModel(ctx, false)
 	case "hf-search":
 		return s.a.HFSearch(ctx, q.Value)
 	case "hf-files":

@@ -74,8 +74,12 @@ func (a *App) load() error {
 		eng.AI = triage.Assess
 	}
 	a.mu.Lock()
+	oldTriage := a.triage
 	a.cfg, a.db, a.triage, a.cfgMod = cfg, db, triage, config.ModTime()
 	a.mu.Unlock()
+	if oldTriage != nil {
+		oldTriage.UnloadLocal()
+	}
 	if old := a.eng.Swap(eng); old != nil {
 		old.Flush()
 	}
@@ -660,7 +664,17 @@ func (a *App) Set(key, value string) error {
 		case "ai.local.threads":
 			return needInt(&c.AI.Local.Threads, 0, 256)
 		case "ai.local.keep_alive":
-			c.AI.Local.KeepAlive = value
+			v := strings.TrimSpace(value)
+			if v == "0" {
+				v = "0s"
+			}
+			if v != "" {
+				d, err := time.ParseDuration(v)
+				if err != nil || d < 0 {
+					return errors.New("ai.local.keep_alive must be a duration such as 0s, 30s, 1m, 2m, or 15m")
+				}
+			}
+			c.AI.Local.KeepAlive = v
 		case "realtime.workers":
 			return needInt(&c.Realtime.Workers, 0, 16)
 		case "realtime.settle_ms":

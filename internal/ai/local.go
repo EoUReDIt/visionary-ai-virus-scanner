@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
@@ -116,9 +117,13 @@ func (o *Ollama) options() map[string]any {
 	return opts
 }
 
-func (o *Ollama) keepAlive() string {
-	if o.Cfg.KeepAlive != "" {
-		return o.Cfg.KeepAlive
+func (o *Ollama) keepAlive() any {
+	ka := strings.TrimSpace(o.Cfg.KeepAlive)
+	if ka == "0" || ka == "0s" {
+		return 0
+	}
+	if ka != "" {
+		return ka
 	}
 	return "15m"
 }
@@ -291,12 +296,12 @@ func (o *Ollama) Pull(ctx context.Context, model string, progress func(string)) 
 
 // Load keeps a model in memory (or unloads it) so the first triage is fast.
 func (o *Ollama) Load(ctx context.Context, model string, load bool) error {
-	keep := any("30m")
-	if o.Cfg.CPUOnly {
+	var keep any = 0
+	if load {
 		keep = o.keepAlive()
-	}
-	if !load {
-		keep = 0
+		if keep == 0 {
+			keep = "2m"
+		}
 	}
 	body := map[string]any{"model": model, "keep_alive": keep}
 	if o.Cfg.CPUOnly {
@@ -308,11 +313,15 @@ func (o *Ollama) Load(ctx context.Context, model string, load bool) error {
 // ---- llama.cpp server (GGUF files) ----
 
 // LlamaServer talks to llama.cpp's OpenAI-compatible server, starting it on
-// demand when a server binary and a GGUF path are configured.
+// demand when a server binary and a GGUF path are configured and stopping it
+// automatically once idle for KeepAlive.
 type LlamaServer struct {
-	Endpoint string
-	Cfg      config.LocalAI
-	cmd      *exec.Cmd
+	Endpoint  string
+	Cfg       config.LocalAI
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	idleTimer *time.Timer
+	inFlight  int
 }
 
 func (l *LlamaServer) Name() string { return "llama-server" }
@@ -323,6 +332,52 @@ func (l *LlamaServer) Model() string {
 	return l.Cfg.ModelPath
 }
 
+func (l *LlamaServer) idleDuration() time.Duration {
+	ka := strings.TrimSpace(l.Cfg.KeepAlive)
+	if ka == "0" || ka == "0s" {
+		return 0
+	}
+	if ka != "" {
+		if d, err := time.ParseDuration(ka); err == nil && d >= 0 {
+			return d
+		}
+	}
+	if l.Cfg.CPUOnly {
+		return 2 * time.Minute
+	}
+	return 15 * time.Minute
+}
+
+func (l *LlamaServer) cancelIdleLocked() {
+	if l.idleTimer != nil {
+		l.idleTimer.Stop()
+		l.idleTimer = nil
+	}
+}
+
+func (l *LlamaServer) scheduleIdleStop() {
+	d := l.idleDuration()
+	l.mu.Lock()
+	if l.inFlight > 0 || l.cmd == nil {
+		l.mu.Unlock()
+		return
+	}
+	l.cancelIdleLocked()
+	if d == 0 {
+		l.stopLocked()
+		l.mu.Unlock()
+		return
+	}
+	l.idleTimer = time.AfterFunc(d, func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if l.inFlight == 0 {
+			l.stopLocked()
+		}
+	})
+	l.mu.Unlock()
+}
+
 func (l *LlamaServer) healthy(ctx context.Context) bool {
 	var v map[string]any
 	return getJSON(ctx, l.Endpoint+"/health", &v) == nil
@@ -330,29 +385,47 @@ func (l *LlamaServer) healthy(ctx context.Context) bool {
 
 // Ensure starts the server if it is not already answering.
 func (l *LlamaServer) Ensure(ctx context.Context) error {
+	l.mu.Lock()
+	l.cancelIdleLocked()
 	if l.healthy(ctx) {
+		l.mu.Unlock()
 		return nil
 	}
-	if l.Cfg.ServerPath == "" || l.Cfg.ModelPath == "" {
-		return fmt.Errorf("llama-server is not running at %s and no server_path/model_path is configured", l.Endpoint)
+	startedHere := false
+	if l.cmd == nil {
+		if l.Cfg.ServerPath == "" || l.Cfg.ModelPath == "" {
+			l.mu.Unlock()
+			return fmt.Errorf("llama-server is not running at %s and no server_path/model_path is configured", l.Endpoint)
+		}
+		if err := CheckGGUF(l.Cfg.ModelPath, l.Cfg.MaxParamsB); err != nil {
+			l.mu.Unlock()
+			return err
+		}
+		port := l.Endpoint[strings.LastIndexByte(l.Endpoint, ':')+1:]
+		cmd := exec.Command(l.Cfg.ServerPath, l.args(port)...)
+		if err := cmd.Start(); err != nil {
+			l.mu.Unlock()
+			return fmt.Errorf("starting llama-server: %w", err)
+		}
+		l.cmd = cmd
+		startedHere = true
 	}
-	if err := CheckGGUF(l.Cfg.ModelPath, l.Cfg.MaxParamsB); err != nil {
-		return err
-	}
-	port := l.Endpoint[strings.LastIndexByte(l.Endpoint, ':')+1:]
-	l.cmd = exec.Command(l.Cfg.ServerPath, l.args(port)...)
-	if err := l.cmd.Start(); err != nil {
-		return fmt.Errorf("starting llama-server: %w", err)
-	}
+	l.mu.Unlock()
 	for i := 0; i < 120; i++ {
 		if l.healthy(ctx) {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
+			if startedHere {
+				l.Stop()
+			}
 			return ctx.Err()
 		case <-time.After(time.Second):
 		}
+	}
+	if startedHere {
+		l.Stop()
 	}
 	return errors.New("llama-server did not become ready within two minutes")
 }
@@ -368,13 +441,32 @@ func (l *LlamaServer) args(port string) []string {
 	return a
 }
 
-func (l *LlamaServer) Stop() {
+func (l *LlamaServer) stopLocked() {
+	l.cancelIdleLocked()
 	if l.cmd != nil && l.cmd.Process != nil {
 		_ = l.cmd.Process.Kill()
+		_ = l.cmd.Wait()
 	}
+	l.cmd = nil
+}
+
+func (l *LlamaServer) Stop() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.stopLocked()
 }
 
 func (l *LlamaServer) Complete(ctx context.Context, system, user string, wantJSON bool) (string, error) {
+	l.mu.Lock()
+	l.inFlight++
+	l.cancelIdleLocked()
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		l.inFlight--
+		l.mu.Unlock()
+		l.scheduleIdleStop()
+	}()
 	if err := l.Ensure(ctx); err != nil {
 		return "", err
 	}

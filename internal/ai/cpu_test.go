@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
 )
@@ -25,6 +26,15 @@ func TestOllamaCPUOnlyRequest(t *testing.T) {
 	opts := got["options"].(map[string]any)
 	if opts["num_gpu"] != float64(0) || opts["num_thread"] != float64(3) || got["keep_alive"] != "2m" {
 		t.Fatalf("cpu-only options not applied: %v / %v", opts, got["keep_alive"])
+	}
+	// Immediate unload ("0s" / "0") sends numeric 0 so Ollama evicts right away.
+	got = nil
+	o = NewLocal(config.LocalAI{Provider: "ollama", Endpoint: srv.URL, Model: "m", KeepAlive: "0s"})
+	if _, err := o.Complete(context.Background(), "s", "u", true); err != nil {
+		t.Fatal(err)
+	}
+	if got["keep_alive"] != float64(0) {
+		t.Fatalf("expected numeric 0 keep_alive for immediate unload, got %#v", got["keep_alive"])
 	}
 	// Default (GPU allowed) sends no num_gpu override.
 	got = nil
@@ -48,6 +58,15 @@ func TestLlamaServerCPUOnlyArgs(t *testing.T) {
 	}
 	if cpuThreads(0) < 1 {
 		t.Error("thread budget below one")
+	}
+	if d := (&LlamaServer{Cfg: config.LocalAI{KeepAlive: "0s"}}).idleDuration(); d != 0 {
+		t.Errorf("expected 0 idle duration for 0s, got %v", d)
+	}
+	if d := (&LlamaServer{Cfg: config.LocalAI{CPUOnly: true}}).idleDuration(); d != 2*time.Minute {
+		t.Errorf("expected 2m default idle duration in CPU-only mode, got %v", d)
+	}
+	if d := (&LlamaServer{Cfg: config.LocalAI{}}).idleDuration(); d != 15*time.Minute {
+		t.Errorf("expected 15m default idle duration, got %v", d)
 	}
 }
 

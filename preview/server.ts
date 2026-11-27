@@ -135,6 +135,7 @@ const state = {
         model_path: "",
         max_params_b: 3.0,
         cpu_only: false,
+        keep_alive: "2m",
       },
       cloud: {
         provider: "gemini",
@@ -824,6 +825,14 @@ app.post("/api/ai", async (req: Request, res: Response) => {
       state.config.ai.local.model = path.basename(String(fpath));
       state.config.ai.local.model_path = String(fpath);
       return res.json({ params_b: 1.72 });
+    case "load":
+      state.ollama_models.forEach((m) => (m.loaded = m.name === state.config.ai.local.model));
+      logEvent("system", "info", `Loaded local model ${state.config.ai.local.model || "into memory"}`);
+      return res.json({ ok: true });
+    case "unload":
+      state.ollama_models.forEach((m) => (m.loaded = false));
+      logEvent("system", "info", "Unloaded local AI model from memory");
+      return res.json({ ok: true });
     case "use-stored": {
       const m = state.stored_models.find((x) => x.name === name);
       if (!m) return res.status(404).json({ error: "stored model not found" });
@@ -996,6 +1005,10 @@ app.post("/api/settings", (req: Request, res: Response) => {
       else if (key === "security.require_password_to_disable") state.config.security.require_password_to_disable = bool;
       else if (key === "ai.cloud.share_snippets") state.config.ai.cloud.share_snippets = bool;
       else if (key === "ai.local.cpu_only") state.config.ai.local.cpu_only = bool;
+      else if (key === "ai.local.keep_alive") {
+        const v = String(value || "").trim();
+        state.config.ai.local.keep_alive = v === "0" ? "0s" : v;
+      }
       else if (key === "ai.confidence_threshold") {
         const n = Number(value);
         if (Number.isNaN(n) || n < 0.5 || n > 0.99) return res.status(400).json({ error: "threshold must be between 0.50 and 0.99" });

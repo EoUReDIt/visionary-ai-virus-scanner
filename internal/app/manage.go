@@ -169,7 +169,7 @@ func (a *App) ollama() *ai.Ollama {
 	if ep == "" || c.Provider == "llama-server" {
 		ep = "http://127.0.0.1:11434"
 	}
-	return &ai.Ollama{Endpoint: ep, ModelName: c.Model}
+	return &ai.Ollama{Endpoint: ep, ModelName: c.Model, Cfg: c}
 }
 
 func (a *App) LocalModels(ctx context.Context) ([]ai.LocalModel, error) { return a.ollama().List(ctx) }
@@ -206,14 +206,23 @@ func (a *App) PullLocalModel(ctx context.Context, model string, progress func(st
 func (a *App) LoadLocalModel(ctx context.Context, load bool) error {
 	c := a.Config().AI.Local
 	if c.Provider == "llama-server" {
+		t := a.Triage()
+		if !load {
+			if t != nil {
+				t.UnloadLocal()
+			}
+			return nil
+		}
+		if t != nil {
+			if ls, ok := t.Local.(*ai.LlamaServer); ok {
+				return ls.Ensure(ctx)
+			}
+		}
 		ls, ok := ai.NewLocal(c).(*ai.LlamaServer)
 		if !ok {
 			return errors.New("llama-server is not configured")
 		}
-		if load {
-			return ls.Ensure(ctx)
-		}
-		return errors.New("stop the llama-server process to unload a GGUF model")
+		return ls.Ensure(ctx)
 	}
 	if c.Model == "" {
 		return errors.New("no local model selected")

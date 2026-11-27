@@ -175,6 +175,16 @@ func NewTriageWithSecrets(cfg *config.Config, secrets map[string]string) *Triage
 
 func (t *Triage) Enabled() bool { return t != nil && (t.Local != nil || t.Cloud != nil) }
 
+// UnloadLocal stops any managed local inference child process (such as llama-server).
+func (t *Triage) UnloadLocal() {
+	if t == nil {
+		return
+	}
+	if ls, ok := t.Local.(*LlamaServer); ok {
+		ls.Stop()
+	}
+}
+
 func (t *Triage) threshold() float64 {
 	if t.Threshold >= 0.5 && t.Threshold <= 0.99 {
 		return t.Threshold
