@@ -16,9 +16,11 @@ import (
 )
 
 const (
-	defaultSettle  = 700 * time.Millisecond // wait for a file to stop changing
-	defaultWorkers = 2
-	defaultPoll    = 1500 * time.Millisecond // process monitor interval
+	defaultSettle   = 700 * time.Millisecond  // wait for a file to stop changing
+	defaultWorkers  = 2
+	defaultPoll     = 1500 * time.Millisecond // process monitor interval
+	coalesceWindow  = 3 * time.Second         // skip duplicate watcher rescans within this window
+	maxPendingPaths = 4096
 )
 
 func msOr(ms int, def time.Duration) time.Duration {
@@ -49,7 +51,11 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 	}
 	mon := behavior.NewMonitor()
 	defer mon.Save()
-	defer func() { a.Engine().Flush() }()
+	a.setReputationDebounce(5 * time.Second)
+	defer func() {
+		a.FlushReputation()
+		a.Engine().Flush()
+	}()
 
 	var (
 		watcher  plat.Watcher
@@ -57,6 +63,8 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 		events   <-chan plat.Event
 		pendMu   sync.Mutex
 		pending  = map[string]time.Time{}
+		inFlight = map[string]bool{}
+		recent   = map[string]time.Time{}
 		burst    int
 		wasOn    = true
 		gaming   bool
@@ -75,12 +83,17 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 	if workers <= 0 {
 		workers = defaultWorkers
 	}
+	execSem := make(chan struct{}, max(2, workers))
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for p := range jobs {
 				a.guardScan(ctx, p, "real-time", nil, nil, say)
+				pendMu.Lock()
+				delete(inFlight, p)
+				recent[p] = time.Now()
+				pendMu.Unlock()
 			}
 		}()
 	}
@@ -113,7 +126,9 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 				burst++
 			}
 			pendMu.Lock()
-			pending[ev.Path] = ev.Time
+			if len(pending) < maxPendingPaths || !pending[ev.Path].IsZero() {
+				pending[ev.Path] = ev.Time
+			}
 			pendMu.Unlock()
 		case now := <-tick.C:
 			// Shared settings: another process may have disabled protection,
@@ -121,6 +136,7 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 			if now.Sub(lastCfg) >= 2*time.Second {
 				lastCfg = now
 				if a.Reload() {
+					a.setReputationDebounce(5 * time.Second)
 					say("settings or definitions changed, reloaded")
 				}
 				_ = os.WriteFile(heartbeat(), []byte(now.Format(time.RFC3339)), 0o644)
@@ -168,14 +184,23 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 			if !wasOn {
 				continue
 			}
-			// Hand settled files to the scan workers.
+			// Hand settled files to the scan workers, coalescing rapid bursts
+			// for files currently in-flight or just scanned.
 			settle := msOr(a.Config().Realtime.SettleMS, defaultSettle)
 			pendMu.Lock()
 			for p, t := range pending {
 				if now.Sub(t) >= settle {
+					if inFlight[p] {
+						continue
+					}
+					if last, ok := recent[p]; ok && now.Sub(last) < coalesceWindow && t.Before(last) {
+						delete(pending, p)
+						continue
+					}
 					select {
 					case jobs <- p:
 						delete(pending, p)
+						inFlight[p] = true
 					default: // workers are busy; try again next tick
 					}
 				}
@@ -208,7 +233,19 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 							Score: an.Score / 2, Detail: strings.Join(an.Reasons, "; ")}}
 						procCtx = &engine.ProcessContext{PID: an.PID, Parent: an.Parent, Cmdline: an.Cmdline}
 					}
-					go a.guardScan(ctx, p.Exe, "on-execute", ctxFindings, procCtx, say)
+					exe := p.Exe
+					select {
+					case execSem <- struct{}{}:
+						go func() {
+							defer func() { <-execSem }()
+							a.guardScan(ctx, exe, "on-execute", ctxFindings, procCtx, say)
+						}()
+					default:
+						// Process storm: skip non-anomalous duplicate image scans when saturated.
+						if len(ctxFindings) > 0 {
+							go a.guardScan(ctx, exe, "on-execute", ctxFindings, procCtx, say)
+						}
+					}
 				}
 			}
 			if cfg.Behavior.Enabled && now.Sub(lastBurst) >= 10*time.Second {
@@ -223,6 +260,14 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 				lastSlow = now
 				mon.Save()
 				a.Engine().Flush()
+				a.FlushReputation()
+				pendMu.Lock()
+				for p, t := range recent {
+					if now.Sub(t) > 2*coalesceWindow {
+						delete(recent, p)
+					}
+				}
+				pendMu.Unlock()
 				if !gaming {
 					if res, err := a.ChannelUpdate("", false); err == nil {
 						for _, r := range res {

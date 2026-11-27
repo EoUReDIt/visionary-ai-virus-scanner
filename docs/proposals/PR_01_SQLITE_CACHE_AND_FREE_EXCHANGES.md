@@ -2,7 +2,7 @@
 
 - **Proposed Branch:** `feat/sqlite-cache-and-keyless-exchanges`
 - **Target Branch:** `main`
-- **Status:** Proposal (Baseline currently runs on atomic JSON caches: `reputation_cache.json` and `risk_exchange.json`)
+- **Status:** Implemented (`internal/cache/` unified SQLite WAL + zero-dep atomic JSON fallback; keyless CIRCL hashlookup, CISA KEV catalog, and Shodan InternetDB with strict RFC 1918 guard wired across CLI, Web UI, and preview)
 - **Editions Affected:** Core, Lite, Safe
 
 ---
@@ -132,8 +132,8 @@ CREATE INDEX IF NOT EXISTS idx_scan_rev ON scan_clean_cache(def_rev);
 
 ## 5. Rollout & Verification Plan
 
-- [ ] Benchmark binary size delta of `modernc.org/sqlite` across Core, Lite, and Safe (confirm Lite idle RSS stays well below the 40 MB Linux / 100 MB Windows budget in CI).
-- [ ] Implement `internal/cache/` store with WAL mode, `busy_timeout`, automatic JSON migration, and unit tests for concurrent reader/writer access.
-- [ ] Add `internal/risk/internetdb.go` with strict RFC 1918 blocklist tests (`192.168.1.1`, `10.0.0.1`, `127.0.0.1` must never leave the host).
-- [ ] Add `internal/reputation/circl.go` keyless known-good hash lookup.
-- [ ] Update Web UI and CLI pickers to clearly badge **No key required** vs **Free API key optional/required**.
+- [x] Implement `internal/cache/` unified `Store` interface (`cache.go`, `sqlite.go`, `driver_sqlite.go` behind `-tags sqlite`, `cache_test.go`) with WAL pragmas (`journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `temp_store=MEMORY`, `cache_size=-4000`), parameterized SQL queries, zero-dependency atomic `JSONStore` fallback, and automatic one-time migration from `reputation_cache.json` / `risk_exchange.json` (`*.migrated.bak`).
+- [x] Add `internal/risk/cisa_kev.go` (keyless CISA KEV static JSON catalog) and `internal/risk/internetdb.go` with strict RFC 1918 / loopback / link-local / CGNAT blocklist tests (`192.168.1.1`, `10.0.0.1`, `127.0.0.1` rejected locally before any network request).
+- [x] Add `internal/reputation/circl.go` keyless known-good NSRL/RDS hash lookup (`hashlookup.circl.lu`) as the default Threat Exchange provider when no VT/OTX keys are configured.
+- [x] Update CLI (`visionary reputation provider circl`, `visionary risk provider cisa-kev`, `visionary risk ip <public-ipv4>`), embedded Web UI, and preview server to clearly badge **No key required** vs **Free API key required/optional** and expose the active cache backend.
+- [ ] On a runner with the Go toolchain (`go`), activate pure-Go SQLite builds with `go get modernc.org/sqlite && go test -tags sqlite ./...` and measure binary size / Lite RSS delta in CI.

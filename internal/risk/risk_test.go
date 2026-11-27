@@ -2,11 +2,15 @@ package risk
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/cache"
 )
 
 func TestNVDSearchAndGuidance(t *testing.T) {
@@ -119,3 +123,86 @@ func TestNVDCVEIDLookup(t *testing.T) {
 		t.Fatalf("unexpected CVE lookup: %+v", advs)
 	}
 }
+
+func TestCISAKEVFeed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"vulnerabilities": [
+				{
+					"cveID": "CVE-2025-2783",
+					"vendorProject": "Google",
+					"product": "Chrome",
+					"vulnerabilityName": "Google Chrome Mojo Sandbox Escape",
+					"dateAdded": "2025-03-27",
+					"shortDescription": "Incorrect handle in Mojo in Google Chrome on Windows allowed sandbox escape.",
+					"cwes": ["CWE-284"]
+				},
+				{
+					"cveID": "CVE-2025-0411",
+					"vendorProject": "7-Zip",
+					"product": "7-Zip",
+					"vulnerabilityName": "7-Zip Mark-of-the-Web Bypass",
+					"dateAdded": "2025-02-04",
+					"shortDescription": "7-Zip before 24.09 allows crafted archives to bypass MotW.",
+					"cwes": ["CWE-693"]
+				}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewCISAKEV(srv.URL)
+	advs, total, err := c.Search(context.Background(), SearchOptions{Query: "chrome", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(advs) != 1 || advs[0].ID != "CVE-2025-2783" || !advs[0].KEV {
+		t.Fatalf("unexpected CISA KEV result: total=%d advs=%+v", total, advs)
+	}
+}
+
+func TestInternetDBStrictPrivateIPGuard(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`{
+			"ip": "1.1.1.1",
+			"ports": [80, 443, 3389],
+			"cpes": ["cpe:/a:openbsd:openssh"],
+			"tags": ["cloud"],
+			"vulns": ["CVE-2024-38077"],
+			"hostnames": ["one.one.one.one"]
+		}`))
+	}))
+	defer srv.Close()
+
+	st := cache.Open(t.TempDir())
+	defer st.Close()
+	idb := NewInternetDB(srv.URL, st)
+
+	// Private / local / loopback / link-local / CGNAT IPs MUST be blocked locally
+	// with zero outbound network requests.
+	for _, blocked := range []string{"192.168.1.1", "10.0.0.1", "172.16.5.4", "127.0.0.1", "169.254.1.1", "100.64.0.1", "0.0.0.0"} {
+		if _, err := idb.Lookup(context.Background(), blocked); !errors.Is(err, ErrPrivateIP) {
+			t.Errorf("expected ErrPrivateIP for %s, got %v", blocked, err)
+		}
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("private IP must never trigger an HTTP request; got %d calls", hits.Load())
+	}
+
+	// Valid public IPv4 lookup hits InternetDB once and caches on disk.
+	exp, err := idb.Lookup(context.Background(), "1.1.1.1")
+	if err != nil {
+		t.Fatalf("public IP lookup failed: %v", err)
+	}
+	if exp.RiskLevel != "critical" || len(exp.RiskyPorts) != 1 || len(exp.Vulns) != 1 || exp.Cached {
+		t.Fatalf("unexpected exposure report: %+v", exp)
+	}
+	// Second lookup must hit cache (still only 1 HTTP request).
+	exp2, err := idb.Lookup(context.Background(), "1.1.1.1")
+	if err != nil || !exp2.Cached || hits.Load() != 1 {
+		t.Fatalf("expected cached second lookup with 1 total HTTP hit: cached=%v hits=%d err=%v", exp2.Cached, hits.Load(), err)
+	}
+}
+

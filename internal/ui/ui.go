@@ -653,6 +653,7 @@ func (s *server) ai(r *http.Request) (any, error) {
 				"otx":        secure.Secret("otx") != "",
 			},
 			"otx_last_sync": cfg.Reputation.OTXLastSync,
+			"cache_backend": s.a.CacheBackend(),
 			"recommended":   ai.RecommendedFor(cfg.AI.Local.MaxParamsB),
 			"models":       models,
 			"ollama":       runtime,
@@ -737,9 +738,15 @@ func (s *server) ai(r *http.Request) (any, error) {
 			return nil, errors.New("paste an API key")
 		}
 		prov := reputation.SecretName(q.Name)
+		if prov == "" {
+			return nil, errors.New("CIRCL hashlookup requires no API key")
+		}
 		return nil, s.a.SetSecret(prov, q.Key)
 	case "reputation-clear-key":
 		prov := reputation.SecretName(q.Name)
+		if prov == "" {
+			return nil, errors.New("CIRCL hashlookup has no stored API key")
+		}
 		return nil, s.a.SetSecret(prov, "")
 	case "otx-sync":
 		n, err := s.a.SyncOTXFeed(ctx)
@@ -768,12 +775,13 @@ func (s *server) risk(r *http.Request) (any, error) {
 		cfg := s.a.Config()
 		st := s.a.RiskState()
 		return map[string]any{
-			"config":    cfg.Risk,
-			"provider":  s.a.ActiveRiskProvider(),
-			"providers": risk.Providers,
-			"key_set":   secure.Secret("nvd") != "",
-			"state":     st,
-			"guidance":  risk.ComputeGuidance(st),
+			"config":        cfg.Risk,
+			"provider":      s.a.ActiveRiskProvider(),
+			"providers":     risk.Providers,
+			"key_set":       secure.Secret("nvd") != "",
+			"cache_backend": s.a.CacheBackend(),
+			"state":         st,
+			"guidance":      risk.ComputeGuidance(st),
 		}, nil
 	}
 	q, err := body(r)
@@ -807,6 +815,8 @@ func (s *server) risk(r *http.Request) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"total": total, "advisories": advs}, nil
+	case "ip-check":
+		return s.a.CheckInternetDB(ctx, q.Value)
 	case "scan-guided":
 		g := s.a.RiskGuidance()
 		paths := g.ExistingPaths()

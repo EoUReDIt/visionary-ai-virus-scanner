@@ -122,3 +122,89 @@ func TestMultiSkipsVirusTotalWhenOTXConvicts(t *testing.T) {
 		t.Fatalf("expected VirusTotal to be skipped after OTX conviction, got %d VT calls", vtHits.Load())
 	}
 }
+
+func TestMultiLookupBatchRespectsPacingAndBatchFlush(t *testing.T) {
+	const (
+		convictedHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		cleanHashA    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		cleanHashB    = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	)
+	var vtCalled []string
+	vtSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		h := parts[len(parts)-1]
+		vtCalled = append(vtCalled, h)
+		_, _ = w.Write([]byte(`{"data":{"attributes":{"last_analysis_stats":{"harmless":60,"malicious":0}}}}`))
+	}))
+	defer vtSrv.Close()
+
+	otxSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, convictedHash) {
+			_, _ = w.Write([]byte(`{"pulse_info":{"count":6,"pulses":[{"name":"Stealer"}]}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer otxSrv.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "reputation_cache.json")
+	cache := OpenCache(cachePath)
+	o := NewOTXWithCache("k", cache)
+	o.BaseURL = otxSrv.URL
+	v := NewVirusTotalWithCache("k", cache)
+	v.BaseURL = vtSrv.URL
+	v.PaceDelay = 15 * time.Millisecond
+
+	start := time.Now()
+	m := NewMulti(o, v)
+	res := m.LookupBatch(context.Background(), []string{convictedHash, cleanHashA, cleanHashB, cleanHashA})
+	elapsed := time.Since(start)
+
+	if len(vtCalled) != 2 {
+		t.Fatalf("expected VirusTotal to receive only 2 non-convicted unique hashes, got %d (%v)", len(vtCalled), vtCalled)
+	}
+	if elapsed < 12*time.Millisecond {
+		t.Fatalf("expected Multi.LookupBatch to honor VirusTotal PaceDelay, finished in %v", elapsed)
+	}
+	if r := res[convictedHash]; !r.Found || r.Malicious < 5 || r.Label != "OTX.Stealer" {
+		t.Fatalf("unexpected convicted result: %+v", r)
+	}
+	if r := res[cleanHashA]; !r.Found || r.Malicious != 0 || r.Total != 60 {
+		t.Fatalf("unexpected clean result A: %+v", r)
+	}
+	// Reload disk cache: batch flush must have persisted all entries.
+	reloaded := OpenCache(cachePath)
+	if _, ok := reloaded.Get("virustotal", cleanHashB); !ok {
+		t.Fatalf("expected batch flush to persist %s to disk cache", cleanHashB)
+	}
+}
+
+func TestCIRCLHashlookup(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if strings.HasSuffix(r.URL.Path, "/lookup/sha256/"+testSHA256) {
+			_, _ = w.Write([]byte(`{"FileName":"notepad.exe","ProductName":"Microsoft Windows","source":"NSRL"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := NewCIRCLWithCache(OpenCache(filepath.Join(t.TempDir(), "circl.json")))
+	c.BaseURL = srv.URL
+
+	mal, tot, lbl, det, found, err := c.LookupDetail(context.Background(), testSHA256)
+	if err != nil || !found || mal != 0 || tot < 40 || lbl != "notepad.exe" || !strings.Contains(det, "CIRCL") {
+		t.Fatalf("unexpected CIRCL known-good result: mal=%d tot=%d lbl=%q det=%q found=%v err=%v", mal, tot, lbl, det, found, err)
+	}
+	// Repeat lookup must hit cache with 0 extra HTTP requests.
+	if _, _, _, _, found2, err2 := c.LookupDetail(context.Background(), testSHA256); err2 != nil || !found2 || hits.Load() != 1 {
+		t.Fatalf("expected cached hit, got found=%v err=%v hits=%d", found2, err2, hits.Load())
+	}
+	// Unknown hash returns found=false without error.
+	unknown := strings.Repeat("d", 64)
+	if _, _, _, _, found3, err3 := c.LookupDetail(context.Background(), unknown); err3 != nil || found3 {
+		t.Fatalf("expected not-found for unknown hash, got found=%v err=%v", found3, err3)
+	}
+}

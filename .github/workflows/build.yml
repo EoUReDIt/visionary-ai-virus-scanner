@@ -25,6 +25,8 @@ jobs:
       - run: go test -tags lite ./...
       - run: go vet -tags safe ./... && GOOS=windows go vet -tags safe ./...
       - run: go test -tags safe ./...
+      - name: Engine allocation benchmarks
+        run: go test -run=^$ -bench=BenchmarkScanFile -benchtime=5x -benchmem ./internal/engine
       - name: Lite idle budget (guard memory and CPU)
         run: |
           go build -tags lite -o visionary-lite ./cmd/visionary
@@ -57,6 +59,8 @@ jobs:
           $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-core"
           .\dist\visionary.exe version
           .\dist\visionary.exe status
+          .\dist\visionary.exe risk guidance --json | Out-Null
+          .\dist\visionary.exe reputation provider | Out-Null
           .\dist\visionary.exe scan .\scripts .\dist --json | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "core scan of the build output reported detections" }
       - name: Smoke test (Lite)
@@ -65,6 +69,8 @@ jobs:
           $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-lite"
           .\dist\visionary-lite.exe version
           .\dist\visionary-lite.exe status
+          .\dist\visionary-lite.exe risk guidance --json | Out-Null
+          .\dist\visionary-lite.exe reputation provider | Out-Null
           .\dist\visionary-lite.exe scan .\scripts --json | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "lite scan reported detections" }
       - name: Smoke test (Safe)
@@ -73,6 +79,8 @@ jobs:
           $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-safe"
           .\dist\visionary-safe.exe version
           .\dist\visionary-safe.exe status
+          .\dist\visionary-safe.exe risk guidance --json | Out-Null
+          .\dist\visionary-safe.exe reputation provider | Out-Null
           .\dist\visionary-safe.exe scan .\scripts --json | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "safe scan reported detections" }
       - name: Lite idle budget (Windows working set)

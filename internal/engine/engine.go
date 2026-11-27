@@ -32,7 +32,15 @@ import (
 
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/defs"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
 )
+
+var streamBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 64<<10)
+		return &b
+	},
+}
 
 const (
 	Clean      = "clean"
@@ -288,9 +296,7 @@ func (e *Engine) Flush() {
 	if !e.dirty || !e.Cfg.Scan.UseCache {
 		return
 	}
-	if len(e.cache) > 500000 {
-		e.cache = map[string]cacheEntry{}
-	}
+	e.evictCacheLocked(e.DB.Manifest.Revision)
 	f, err := os.Create(cachePath() + ".tmp")
 	if err != nil {
 		return
@@ -303,6 +309,46 @@ func (e *Engine) Flush() {
 	if err == nil {
 		_ = os.Rename(cachePath()+".tmp", cachePath())
 		e.dirty = false
+	}
+}
+
+func (e *Engine) cacheMaxEntries() int {
+	if edition.Lite || (e.Cfg != nil && e.Cfg.Profile == "lite") {
+		return 25000
+	}
+	return 100000
+}
+
+// evictCacheLocked keeps the in-memory clean cache bounded by first dropping
+// entries from older definition revisions and then trimming oldest-modified
+// files if the map is still over its cap.
+func (e *Engine) evictCacheLocked(curRev int) {
+	limit := e.cacheMaxEntries()
+	if len(e.cache) <= limit {
+		return
+	}
+	for k, v := range e.cache {
+		if v.Rev != curRev {
+			delete(e.cache, k)
+		}
+	}
+	if len(e.cache) <= limit {
+		return
+	}
+	type pair struct {
+		key string
+		mod int64
+	}
+	items := make([]pair, 0, len(e.cache))
+	for k, v := range e.cache {
+		items = append(items, pair{key: k, mod: v.Mod})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].mod < items[j].mod })
+	// Drop down to 90% of cap so subsequent inserts do not re-sort on every file.
+	target := limit - limit/10
+	drop := len(e.cache) - target
+	for i := 0; i < drop && i < len(items); i++ {
+		delete(e.cache, items[i].key)
 	}
 }
 
@@ -326,6 +372,21 @@ func (e *Engine) maxBytes() int64 {
 		mb = 64
 	}
 	return int64(mb) << 20
+}
+
+// contentHeadBytes caps how much of a single file is materialized into heap
+// for YARA/script/entropy scanning. Full-file hashing still streams the entire
+// file via a pooled 64 KiB buffer, and PE/Authenticode/ZIP layers read larger
+// files directly via io.ReaderAt without allocating full-file slices.
+func (e *Engine) contentHeadBytes() int64 {
+	head := int64(4 << 20)
+	if edition.Lite || (e.Cfg != nil && e.Cfg.Profile == "lite") {
+		head = 2 << 20
+	}
+	if limit := e.maxBytes(); limit < head {
+		return limit
+	}
+	return head
 }
 
 func pathKey(p string) string {
@@ -396,24 +457,54 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 	}
 	hm, h1, h2 := md5.New(), sha1.New(), sha256.New()
 	hashes := io.MultiWriter(hm, h1, h2)
-	limit := e.maxBytes()
-	data, err := io.ReadAll(io.TeeReader(io.LimitReader(f, limit), hashes))
-	if err == nil && res.Size > limit {
-		// Large files are still hashed in full; content layers see the head.
-		_, err = io.Copy(hashes, f)
-		res.add(Finding{"archive", "partial-content-scan", 0,
-			fmt.Sprintf("only the first %d MB were content-scanned", limit>>20)})
+	maxScan := e.maxBytes()
+	headLimit := e.contentHeadBytes()
+	capSize := res.Size
+	if capSize > headLimit {
+		capSize = headLimit
 	}
-	f.Close()
+	// Stream the entire file through a pooled 64 KiB buffer for hashing while
+	// capturing at most headLimit bytes into a single pre-sized slice (no
+	// io.ReadAll 2x growth spikes).
+	data := make([]byte, 0, capSize)
+	bufp := streamBufPool.Get().(*[]byte)
+	buf := *bufp
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			_, _ = hashes.Write(buf[:n])
+			if rem := int(headLimit) - len(data); rem > 0 {
+				take := n
+				if take > rem {
+					take = rem
+				}
+				data = append(data, buf[:take]...)
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			err = rerr
+			break
+		}
+	}
+	streamBufPool.Put(bufp)
 	if err != nil {
+		f.Close()
 		res.Verdict, res.Error = Failed, err.Error()
 		return res
+	}
+	if res.Size > headLimit {
+		res.add(Finding{"archive", "partial-content-scan", 0,
+			fmt.Sprintf("only the first %d MB were content-scanned", headLimit>>20)})
 	}
 	sum := func(h hash.Hash) []byte { return h.Sum(nil) }
 	dm, d1, d2 := sum(hm), sum(h1), sum(h2)
 	res.MD5, res.SHA1, res.SHA256 = hex.EncodeToString(dm), hex.EncodeToString(d1), hex.EncodeToString(d2)
 
 	if e.allowed(path, res.SHA256) {
+		f.Close()
 		res.Verdict, res.Action = Skipped, "allowlisted"
 		return res
 	}
@@ -421,7 +512,15 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 		res.add(Finding{"hash", name, 100, "known sample (definitions: " + src + ")"})
 	}
 
-	e.analyze(data, filepath.Base(path), res, 0, true)
+	// Pass the open file handle as io.ReaderAt so PE structures, Authenticode
+	// signatures at EOF, and ZIP archives (up to maxScan) do not need the whole
+	// file copied into RAM.
+	var readerAt io.ReaderAt
+	if res.Size > headLimit {
+		readerAt = f
+	}
+	e.analyzeWithReader(data, readerAt, res.Size, maxScan, filepath.Base(path), res, 0, true)
+	f.Close()
 	for _, c := range opt.Context {
 		res.add(c)
 	}
@@ -443,6 +542,14 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 	if res.Score > 0 || opt.Describe {
 		res.Features.Strings = interestingStrings(data, 40)
 	}
+	// Release the file content buffer before slow external/network escalations
+	// (Defender, Threat Exchange, AI) unless AMSI needs a small script buffer.
+	var amsiData []byte
+	if t := res.Features.Type; (t == "script" || t == "text") && len(data) < 4<<20 {
+		amsiData = data
+	}
+	data = nil
+
 	if res.Score > 0 && res.Features.PE != nil && res.Features.PE.HasSignature && e.Defender != nil {
 		if ok, err := e.Defender.VerifyTrust(path); err == nil && ok {
 			res.Trusted = true
@@ -455,14 +562,18 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 		shouldEscalate = true
 	}
 	if opt.Escalate && shouldEscalate && ctx.Err() == nil {
-		e.escalate(ctx, path, data, res, opt.Process, opt.NoCache)
+		e.escalate(ctx, path, amsiData, res, opt.Process, opt.NoCache)
 	}
+	amsiData = nil
 
 	switch res.Verdict {
 	case Clean:
 		if e.Cfg.Scan.UseCache && len(opt.Context) == 0 {
 			e.cacheMu.Lock()
 			e.cache[key] = cacheEntry{res.Size, st.ModTime().UnixNano(), rev}
+			if len(e.cache) > e.cacheMaxEntries() {
+				e.evictCacheLocked(rev)
+			}
 			e.dirty = true
 			e.cacheMu.Unlock()
 		}
@@ -480,8 +591,12 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 	return res
 }
 
-// analyze runs the content layers on a buffer (a file or an archive member).
+// analyze runs the content layers on an in-memory buffer (such as an archive member).
 func (e *Engine) analyze(data []byte, name string, res *Result, depth int, top bool) {
+	e.analyzeWithReader(data, nil, int64(len(data)), e.maxBytes(), name, res, depth, top)
+}
+
+func (e *Engine) analyzeWithReader(data []byte, r io.ReaderAt, totalSize, maxZipSize int64, name string, res *Result, depth int, top bool) {
 	typ := detectType(data, name)
 	if top {
 		res.Features.Type = typ
@@ -499,13 +614,23 @@ func (e *Engine) analyze(data []byte, name string, res *Result, depth int, top b
 	}
 	switch typ {
 	case "pe":
-		info, fs := analyzePE(data)
+		var info *PEInfo
+		var fs []Finding
+		if r != nil {
+			info, fs = analyzePEReader(r)
+		} else {
+			info, fs = analyzePE(data)
+		}
 		for _, f := range fs {
 			res.add(f)
 		}
 		if top {
 			res.Features.PE = info
-			res.Features.Signers = signers(data)
+			if r != nil {
+				res.Features.Signers = signersReader(r, totalSize)
+			} else {
+				res.Features.Signers = signers(data)
+			}
 		}
 	case "script", "text", "lnk":
 		if len(data) <= 8<<20 {
@@ -522,7 +647,11 @@ func (e *Engine) analyze(data []byte, name string, res *Result, depth int, top b
 		}
 	case "zip":
 		if e.Cfg.Scan.ScanArchives && depth < zipMaxDepth {
-			e.scanZip(data, depth, res)
+			if r != nil && totalSize <= maxZipSize {
+				e.scanZipReader(r, totalSize, depth, res)
+			} else if r == nil {
+				e.scanZip(data, depth, res)
+			}
 		}
 	}
 }
@@ -547,6 +676,8 @@ func (e *Engine) escalate(ctx context.Context, path string, data []byte, res *Re
 			return
 		}
 	}
+	// Release AMSI script buffer before network-bound Threat Exchange / AI calls.
+	data = nil
 
 	if e.Rep != nil && e.Cfg.Reputation.Enabled() && !gaming {
 		var (

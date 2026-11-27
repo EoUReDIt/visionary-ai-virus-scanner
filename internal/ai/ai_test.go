@@ -3,10 +3,14 @@ package ai
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
@@ -150,3 +154,54 @@ func TestRichVerdictParsing(t *testing.T) {
 	}
 }
 
+func TestClaudeHTTPProvider(t *testing.T) {
+	var gotKey, gotVer, gotBeta string
+	var gotBody map[string]any
+	status := http.StatusOK
+	reply := `{"stop_reason":"end_turn","content":[{"type":"text","text":"{\"verdict\":\"benign\",\"confidence\":0.92}"}]}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("x-api-key")
+		gotVer = r.Header.Get("anthropic-version")
+		gotBeta = r.Header.Get("anthropic-beta")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(reply))
+	}))
+	defer srv.Close()
+
+	c := NewClaude("sk-ant-test", "claude-sonnet-4-5", "medium")
+	c.endpoint = srv.URL
+	out, err := c.Complete(context.Background(), "sys prompt", "user report", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotKey != "sk-ant-test" || gotVer != anthropicAPIVersion || gotBeta != anthropicFallbackBeta {
+		t.Fatalf("unexpected headers: key=%q ver=%q beta=%q", gotKey, gotVer, gotBeta)
+	}
+	if oc, ok := gotBody["output_config"].(map[string]any); !ok || oc["effort"] != "medium" {
+		t.Fatalf("missing output_config.effort: %+v", gotBody)
+	}
+	if !strings.Contains(out, `"benign"`) {
+		t.Fatalf("unexpected text output: %q", out)
+	}
+
+	// Refusal handling.
+	reply = `{"stop_reason":"refusal","content":[{"type":"text","text":"cannot assist"}]}`
+	if _, err := c.Complete(context.Background(), "sys", "user", true); err == nil || !strings.Contains(err.Error(), "declined") {
+		t.Fatalf("expected refusal error, got %v", err)
+	}
+
+	// Error status mapping (401 / 404 / 429).
+	for code, want := range map[int]string{
+		http.StatusUnauthorized:    "rejected",
+		http.StatusNotFound:        "not available",
+		http.StatusTooManyRequests: "rate limited",
+	} {
+		status = code
+		reply = `{"error":{"type":"err"}}`
+		if _, err := c.Complete(context.Background(), "sys", "user", true); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("status %d: expected %q, got %v", code, want, err)
+		}
+	}
+}

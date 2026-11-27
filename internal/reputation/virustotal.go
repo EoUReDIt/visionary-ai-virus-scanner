@@ -100,6 +100,8 @@ func (v *VirusTotal) LookupDetail(ctx context.Context, sha256 string) (malicious
 // paces live requests to respect the free 4 req/min limit, and stops cleanly
 // if VirusTotal returns HTTP 429 rate-limit.
 func (v *VirusTotal) LookupBatch(ctx context.Context, hashes []string) map[string]LookupResult {
+	v.cache.BeginBatch()
+	defer v.cache.EndBatch()
 	out := make(map[string]LookupResult, len(hashes))
 	var uncached []string
 	seen := map[string]bool{}

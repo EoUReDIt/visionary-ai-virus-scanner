@@ -53,9 +53,9 @@ const usage = `Visionary — antivirus with local and cloud AI
   visionary ai local list|pull <model>|use <model>|gguf <file>|load|unload
   visionary ai cloud provider gemini|claude|openai|set-key|clear-key|model <id>|endpoint <url>
   visionary ai explain <file>
-  visionary reputation provider [virustotal|otx|both]
-  visionary reputation set-key|clear-key [virustotal|otx] | sync-otx
-  visionary risk sync|guidance|search <query>|provider [nvd|custom]|set-key|clear-key
+  visionary reputation provider [circl|virustotal|otx|both]
+  visionary reputation set-key|clear-key [virustotal|otx] | sync-otx | scan [path] [--limit N]
+  visionary risk sync|guidance|search <query>|ip <public-ipv4>|provider [nvd|cisa-kev|custom]|set-key|clear-key
 
   visionary quarantine list|restore <id> [--allow] [--to path]|delete <id>
   visionary allow list|add <path-or-sha256>|remove <item>
@@ -146,6 +146,7 @@ func interruptible() context.Context {
 }
 
 func main() {
+	app.TuneMemoryLimit("")
 	color = term.IsTerminal(int(os.Stdout.Fd())) && os.Getenv("NO_COLOR") == "" && plat.EnableANSI()
 	argv := os.Args[1:]
 
@@ -293,7 +294,7 @@ func main() {
 				}
 			}
 		default:
-			fail(errors.New("usage: visionary reputation provider [virustotal|otx|both] | set-key [virustotal|otx] | clear-key [virustotal|otx] | sync-otx | scan [path]"))
+			fail(errors.New("usage: visionary reputation provider [circl|virustotal|otx|both] | set-key [virustotal|otx] | clear-key [virustotal|otx] | sync-otx | scan [path]"))
 		}
 	case "risk":
 		cmdRisk(a, fs, rest)
@@ -359,13 +360,16 @@ func onOff(b bool) string {
 	return red("off")
 }
 
+func row(k, v string) {
+	fmt.Printf("  %-22s %s\n", k, v)
+}
+
 func cmdStatus(a *app.App) {
 	s := a.Status(true)
 	if jsonOut {
 		emit(s)
 		return
 	}
-	row := func(k, v string) { fmt.Printf("  %-22s %s\n", k, v) }
 	fmt.Println(bold("Visionary " + s.Version + " (" + s.Edition + " edition)"))
 	prot := onOff(s.Protection) + dim("  ("+s.ProtReason+")")
 	row("Real-time protection", prot)
@@ -386,6 +390,9 @@ func cmdStatus(a *app.App) {
 	}
 	row("AI", aiLine)
 	var repParts []string
+	if s.RepProvider == "circl" {
+		repParts = append(repParts, "CIRCL hashlookup (no key)")
+	}
 	if s.VTKey && (s.RepProvider == "virustotal" || s.RepProvider == "both") {
 		repParts = append(repParts, "VirusTotal")
 	}
@@ -404,6 +411,9 @@ func cmdStatus(a *app.App) {
 		riskLine = fmt.Sprintf("%s · %d priority targets", s.RiskPosture, s.RiskTargets)
 	}
 	row("Risk Exchange", riskLine)
+	if s.CacheBackend != "" {
+		row("Cache backend", s.CacheBackend)
+	}
 	beh := fmt.Sprintf("%d programs known", s.Behavior.Executables)
 	if s.Learning {
 		beh += yellow("  · learning")
@@ -1076,7 +1086,7 @@ func cmdSettings(a *app.App, fs *flag.FlagSet, rest []string) {
 			keys := []string{"realtime.auto_quarantine", "scan.max_file_size_mb", "scan.workers", "scan.scan_archives",
 				"scan.use_cache", "scan.ai_budget", "behavior.enabled", "behavior.threshold",
 				"security.require_password_to_disable", "windows.defender_second_opinion",
-				"reputation.provider", "reputation.virustotal", "reputation.otx",
+				"reputation.provider", "reputation.circl", "reputation.virustotal", "reputation.otx",
 				"risk.enabled", "risk.provider", "risk.endpoint", "risk.kev_only", "risk.min_severity", "risk.auto_prioritize",
 				"ai.sensitivity", "ai.confidence_threshold", "ai.cloud.provider", "ai.cloud.endpoint",
 				"ai.cloud.share_snippets", "ai.cloud.model", "ai.cloud.effort", "ai.local.endpoint", "ai.local.provider",
@@ -1228,6 +1238,44 @@ func cmdRisk(a *app.App, fs *flag.FlagSet, rest []string) {
 			}
 			fmt.Printf("  %-16s  CVSS %-4.1f  %-16s  %s\n", c.ID, c.CVSS, tag, c.Summary)
 		}
+	case "ip":
+		rawIP := need(pos, 1, "a public IPv4 address")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		exp, err := a.CheckInternetDB(ctx, rawIP)
+		check(err)
+		if jsonOut {
+			emit(exp)
+			return
+		}
+		tag := green(strings.ToUpper(exp.RiskLevel))
+		if exp.RiskLevel == "critical" {
+			tag = red(strings.ToUpper(exp.RiskLevel))
+		} else if exp.RiskLevel == "elevated" {
+			tag = yellow(strings.ToUpper(exp.RiskLevel))
+		}
+		cacheNote := ""
+		if exp.Cached {
+			cacheNote = dim(" (cached)")
+		}
+		fmt.Printf("%s  %s%s\n", bold(exp.IP), tag, cacheNote)
+		fmt.Println("  " + exp.Summary)
+		if len(exp.Ports) > 0 {
+			var ps []string
+			for _, p := range exp.Ports {
+				ps = append(ps, fmt.Sprintf("%d", p))
+			}
+			row("Open ports", strings.Join(ps, ", "))
+		}
+		if len(exp.RiskyPorts) > 0 {
+			row("Risky ports", yellow(strings.Join(exp.RiskyPorts, ", ")))
+		}
+		if len(exp.Vulns) > 0 {
+			row("Indexed CVEs", red(strings.Join(exp.Vulns, ", ")))
+		}
+		if len(exp.Hostnames) > 0 {
+			row("Hostnames", strings.Join(exp.Hostnames, ", "))
+		}
 	case "provider":
 		p := arg(pos, 1)
 		if p == "" {
@@ -1245,6 +1293,6 @@ func cmdRisk(a *app.App, fs *flag.FlagSet, rest []string) {
 		check(a.SetSecret("nvd", ""))
 		ok("NIST NVD API key removed (using keyless free tier: 5 req/30s)")
 	default:
-		fail(errors.New("usage: visionary risk status|sync|guidance|search <query> [--kev] [--severity CRITICAL|HIGH]|provider [nvd|custom]|set-key|clear-key"))
+		fail(errors.New("usage: visionary risk status|sync|guidance|search <query> [--kev] [--severity CRITICAL|HIGH]|ip <public-ipv4>|provider [nvd|cisa-kev|custom]|set-key|clear-key"))
 	}
 }

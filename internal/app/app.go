@@ -5,20 +5,25 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
+
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/ai"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/behavior"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/cache"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/defs"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
@@ -36,11 +41,28 @@ type App struct {
 	db       *defs.DB
 	eng      atomic.Pointer[engine.Engine]
 	triage   *ai.Triage
+	store    cache.Store
+	repCache *reputation.DiskCache
 	Warnings []string
 
 	gameAt time.Time
 	gameOn bool
 	gameMu sync.Mutex
+}
+
+// TuneMemoryLimit applies a soft Go heap ceiling (64 MiB) and tighter GC
+// target (GOGC=50) in Lite builds or when the lite profile is active, unless
+// the user explicitly configured GOMEMLIMIT or GOGC in the environment.
+func TuneMemoryLimit(profile string) {
+	if !edition.Lite && profile != "lite" {
+		return
+	}
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(64 << 20)
+	}
+	if os.Getenv("GOGC") == "" {
+		debug.SetGCPercent(50)
+	}
 }
 
 // Open loads settings and definitions and wires the layers together.
@@ -63,9 +85,13 @@ func (a *App) load() error {
 	if d := winsec.New(); d != nil {
 		eng.Defender = d
 	}
-	repCache := reputation.OpenCache(config.Path("reputation_cache.json"))
+	store := cache.Open(config.Dir())
+	repCache := reputation.OpenCacheWithStore(store)
 	repProv := activeRepProvider(cfg)
 	var repList []reputation.Provider
+	if repProv == "circl" {
+		repList = append(repList, reputation.NewCIRCLWithCache(repCache))
+	}
 	if repProv == "otx" || repProv == "both" {
 		if key := secure.Secret("otx"); key != "" && (cfg.Reputation.OTX || repProv == "otx") {
 			repList = append(repList, reputation.NewOTXWithCache(key, repCache))
@@ -89,10 +115,19 @@ func (a *App) load() error {
 	if triage.Enabled() {
 		eng.AI = triage.Assess
 	}
+	TuneMemoryLimit(cfg.Profile)
 	a.mu.Lock()
 	oldTriage := a.triage
-	a.cfg, a.db, a.triage, a.cfgMod = cfg, db, triage, config.ModTime()
+	oldRepCache := a.repCache
+	oldStore := a.store
+	a.cfg, a.db, a.triage, a.store, a.repCache, a.cfgMod = cfg, db, triage, store, repCache, config.ModTime()
 	a.mu.Unlock()
+	if oldRepCache != nil {
+		oldRepCache.Flush()
+	}
+	if oldStore != nil {
+		_ = oldStore.Close()
+	}
 	if oldTriage != nil {
 		oldTriage.UnloadLocal()
 	}
@@ -100,6 +135,57 @@ func (a *App) load() error {
 		old.Flush()
 	}
 	return nil
+}
+
+// CacheBackend reports which unified cache backend is active ("sqlite" or "json").
+func (a *App) CacheBackend() string {
+	a.mu.Lock()
+	st := a.store
+	a.mu.Unlock()
+	if st != nil {
+		return st.Backend()
+	}
+	return "json"
+}
+
+func (a *App) cacheStore() cache.Store {
+	a.mu.Lock()
+	st := a.store
+	a.mu.Unlock()
+	return st
+}
+
+func (a *App) reputationCache() *reputation.DiskCache {
+	a.mu.Lock()
+	rc := a.repCache
+	st := a.store
+	a.mu.Unlock()
+	if rc != nil {
+		return rc
+	}
+	if st != nil {
+		return reputation.OpenCacheWithStore(st)
+	}
+	return reputation.OpenCache(config.Path("reputation_cache.json"))
+}
+
+// FlushReputation persists any debounced Threat Exchange cache entries to disk.
+func (a *App) FlushReputation() {
+	a.mu.Lock()
+	rc := a.repCache
+	a.mu.Unlock()
+	if rc != nil {
+		rc.Flush()
+	}
+}
+
+func (a *App) setReputationDebounce(d time.Duration) {
+	a.mu.Lock()
+	rc := a.repCache
+	a.mu.Unlock()
+	if rc != nil {
+		rc.SetDebounce(d)
+	}
 }
 
 // Reload picks up changes made by another process (CLI, UI or guard).
@@ -160,10 +246,10 @@ func (a *App) Log(typ, severity, msg string, data any) {
 	defer eventMu.Unlock()
 	p := eventsPath()
 	if st, err := os.Stat(p); err == nil && st.Size() > 8<<20 {
-		// Keep the newer half.
+		// Keep the newer half without duplicating the byte slice into a string.
 		if b, err := os.ReadFile(p); err == nil {
 			b = b[len(b)/2:]
-			if i := strings.IndexByte(string(b), '\n'); i >= 0 {
+			if i := bytes.IndexByte(b, '\n'); i >= 0 {
 				_ = os.WriteFile(p, b[i+1:], 0o644)
 			}
 		}
@@ -176,21 +262,50 @@ func (a *App) Log(typ, severity, msg string, data any) {
 	_, _ = f.Write(append(line, '\n'))
 }
 
-// Events returns the newest n events, newest first.
+const eventsTailWindow int64 = 256 << 10
+
+func scanEvents(r io.Reader, skipFirst bool) []Event {
+	var all []Event
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 32*1024), 4<<20)
+	if skipFirst {
+		// We sought into the middle of a line; discard the partial head.
+		sc.Scan()
+	}
+	for sc.Scan() {
+		var ev Event
+		if json.Unmarshal(sc.Bytes(), &ev) == nil {
+			all = append(all, ev)
+		}
+	}
+	return all
+}
+
+// Events returns the newest n events, newest first. For small UI/CLI tail
+// queries (n <= 200) on large logs, it reads only the trailing 256 KiB window
+// instead of parsing the entire multi-megabyte log on every poll.
 func (a *App) Events(n int) []Event {
 	f, err := os.Open(eventsPath())
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
+
 	var all []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 4<<20)
-	for sc.Scan() {
-		var ev Event
-		if json.Unmarshal(sc.Bytes(), &ev) == nil {
-			all = append(all, ev)
+	usedTail := false
+	if n > 0 && n <= 200 {
+		if st, err := f.Stat(); err == nil && st.Size() > eventsTailWindow {
+			if _, err := f.Seek(st.Size()-eventsTailWindow, io.SeekStart); err == nil {
+				all = scanEvents(f, true)
+				usedTail = true
+			}
 		}
+	}
+	if !usedTail || (n > 0 && len(all) < n) {
+		if usedTail {
+			_, _ = f.Seek(0, io.SeekStart)
+		}
+		all = scanEvents(f, false)
 	}
 	if n > 0 && len(all) > n {
 		all = all[len(all)-n:]
@@ -339,6 +454,7 @@ type Status struct {
 	RiskPosture   string           `json:"risk_posture"`
 	RiskKEVs      int              `json:"risk_kevs"`
 	RiskTargets   int              `json:"risk_targets"`
+	CacheBackend  string           `json:"cache_backend"`
 	Quarantine    int              `json:"quarantined"`
 	Learning      bool             `json:"behavior_learning"`
 	Behavior      behavior.Summary `json:"behavior"`
@@ -391,8 +507,10 @@ func activeRepProvider(cfg *config.Config) string {
 		return "both"
 	case otx:
 		return "otx"
-	default:
+	case vt:
 		return "virustotal"
+	default:
+		return "circl"
 	}
 }
 
@@ -402,6 +520,8 @@ func (a *App) ActiveReputationProvider() string {
 
 func (a *App) HasReputationKey() bool {
 	switch a.ActiveReputationProvider() {
+	case "circl":
+		return true
 	case "otx":
 		return secure.Secret("otx") != ""
 	case "both":
@@ -428,7 +548,8 @@ func (a *App) Status(withWindows bool) *Status {
 		VTKey: secure.Secret("virustotal") != "", OTXKey: secure.Secret("otx") != "",
 		RepProvider: activeRepProvider(cfg),
 		RiskPosture: rg.Posture, RiskKEVs: rg.KEVCount, RiskTargets: len(rg.PriorityTargets),
-		Quarantine:  len(engine.QuarantineList()), Learning: a.Learning(),
+		CacheBackend: a.CacheBackend(),
+		Quarantine:   len(engine.QuarantineList()), Learning: a.Learning(),
 		Behavior: behavior.Summarize(behavior.Load()), BootScan: BootScanPending(),
 		Admin: plat.IsAdmin(), DataDir: config.Dir(), Warnings: a.Warnings,
 	}
@@ -469,6 +590,9 @@ func (a *App) finish(kind string, sum *engine.Summary) *engine.Summary {
 	for _, d := range sum.Detections {
 		a.logDetection(kind+" scan", d)
 	}
+	// Promptly return freed scan heap pages to the OS so working set drops
+	// back to idle baseline immediately after Quick/Targeted/Boot scans.
+	debug.FreeOSMemory()
 	return sum
 }
 
@@ -532,20 +656,82 @@ func (a *App) ActiveRiskProvider() string {
 func (a *App) riskClient() risk.Provider {
 	cfg := a.Config().Risk
 	prov := a.ActiveRiskProvider()
+	if prov == "cisa-kev" {
+		return risk.NewCISAKEV(cfg.Endpoint)
+	}
 	return risk.NewNVD(secure.Secret("nvd"), cfg.Endpoint, prov == "custom")
 }
 
+func snapshotToRiskState(snap cache.RiskSnapshot) risk.State {
+	st := risk.State{
+		SyncedAt:   snap.SyncedAt,
+		Provider:   snap.Provider,
+		TotalMatch: snap.TotalMatch,
+		Advisories: make([]risk.Advisory, 0, len(snap.Advisories)),
+	}
+	for _, r := range snap.Advisories {
+		st.Advisories = append(st.Advisories, risk.Advisory{
+			ID:        r.ID,
+			Source:    r.Source,
+			Severity:  r.Severity,
+			CVSS:      r.CVSS,
+			KEV:       r.KEV,
+			KEVName:   r.KEVName,
+			Summary:   r.Summary,
+			Published: r.Published,
+			Modified:  r.Modified,
+			Products:  r.Products,
+			CWEs:      r.CWEs,
+			ScanHints: r.ScanHints,
+			URL:       r.URL,
+		})
+	}
+	return st
+}
+
+func riskStateToSnapshot(st risk.State) cache.RiskSnapshot {
+	snap := cache.RiskSnapshot{
+		SyncedAt:   st.SyncedAt,
+		Provider:   st.Provider,
+		TotalMatch: st.TotalMatch,
+		Advisories: make([]cache.RiskRecord, 0, len(st.Advisories)),
+	}
+	for _, a := range st.Advisories {
+		snap.Advisories = append(snap.Advisories, cache.RiskRecord{
+			ID:        a.ID,
+			Source:    a.Source,
+			Severity:  a.Severity,
+			CVSS:      a.CVSS,
+			KEV:       a.KEV,
+			KEVName:   a.KEVName,
+			Summary:   a.Summary,
+			Published: a.Published,
+			Modified:  a.Modified,
+			Products:  a.Products,
+			CWEs:      a.CWEs,
+			ScanHints: a.ScanHints,
+			URL:       a.URL,
+		})
+	}
+	return snap
+}
+
 func (a *App) RiskState() risk.State {
+	if st := a.cacheStore(); st != nil {
+		if snap := st.LoadRisk(); len(snap.Advisories) > 0 || snap.SyncedAt != "" {
+			return snapshotToRiskState(snap)
+		}
+	}
 	return risk.LoadState("")
 }
 
 func (a *App) RiskGuidance() risk.Guidance {
-	return risk.ComputeGuidance(risk.LoadState(""))
+	return risk.ComputeGuidance(a.RiskState())
 }
 
 // SyncRiskExchange fetches active high-risk/KEV CVEs from the configured
-// HTTP/API provider (NIST NVD CVE 2.0 by default — free without an API key)
-// and updates local scan guidance.
+// HTTP/API provider (NIST NVD CVE 2.0 or CISA KEV catalog — free without an
+// API key) and updates local scan guidance.
 func (a *App) SyncRiskExchange(ctx context.Context) (risk.State, risk.Guidance, error) {
 	cfg := a.Config().Risk
 	sev := cfg.MinSeverity
@@ -572,11 +758,15 @@ func (a *App) SyncRiskExchange(ctx context.Context) (risk.State, risk.Guidance, 
 		TotalMatch: total,
 		Advisories: advs,
 	}
-	if err := risk.SaveState("", st); err != nil {
+	if store := a.cacheStore(); store != nil {
+		if err := store.SaveRisk(riskStateToSnapshot(st)); err != nil {
+			return st, risk.ComputeGuidance(st), err
+		}
+	} else if err := risk.SaveState("", st); err != nil {
 		return st, risk.ComputeGuidance(st), err
 	}
 	g := risk.ComputeGuidance(st)
-	a.Log("system", "info", fmt.Sprintf("Risk Exchange synced %d advisories (%d KEV) — scan posture: %s", len(advs), g.KEVCount, g.Posture), nil)
+	a.Log("system", "info", fmt.Sprintf("Risk Exchange synced %d advisories (%d KEV) from %s — scan posture: %s", len(advs), g.KEVCount, st.Provider, g.Posture), nil)
 	return st, g, nil
 }
 
@@ -584,6 +774,25 @@ func (a *App) SyncRiskExchange(ctx context.Context) (risk.State, risk.Guidance, 
 // Risk Exchange HTTP/API provider.
 func (a *App) SearchRiskExchange(ctx context.Context, opts risk.SearchOptions) ([]risk.Advisory, int, error) {
 	return a.riskClient().Search(ctx, opts)
+}
+
+// CheckInternetDB runs a keyless Shodan InternetDB exposure check on a single
+// public IPv4 address (e.g. a user's router WAN IP or an outbound remote IP).
+// Private LAN / loopback / link-local addresses are strictly rejected locally
+// before any outbound request is made.
+func (a *App) CheckInternetDB(ctx context.Context, rawIP string) (*risk.IPExposure, error) {
+	exp, err := risk.NewInternetDB("", a.cacheStore()).Lookup(ctx, rawIP)
+	if err != nil {
+		return nil, err
+	}
+	sev := "info"
+	if exp.RiskLevel == "critical" {
+		sev = "high"
+	} else if exp.RiskLevel == "elevated" {
+		sev = "warn"
+	}
+	a.Log("system", sev, fmt.Sprintf("InternetDB check %s (%s): %s", exp.IP, exp.RiskLevel, exp.Summary), nil)
+	return exp, nil
 }
 
 // TargetedScan scans exactly the files and folders given.
@@ -750,15 +959,20 @@ func (a *App) Set(key, value string) error {
 		case "reputation.provider":
 			p := reputation.NormalizeProvider(value)
 			if p == "" {
-				return errors.New("reputation.provider must be virustotal, otx, or both")
+				return errors.New("reputation.provider must be circl, virustotal, otx, or both")
 			}
 			c.Reputation.Provider = p
+			if p == "circl" {
+				c.Reputation.CIRCL = true
+			}
 			if p == "otx" || p == "both" {
 				c.Reputation.OTX = secure.Secret("otx") != ""
 			}
 			if p == "virustotal" || p == "both" {
 				c.Reputation.VirusTotal = secure.Secret("virustotal") != ""
 			}
+		case "reputation.circl":
+			return needBool(&c.Reputation.CIRCL)
 		case "reputation.virustotal":
 			return needBool(&c.Reputation.VirusTotal)
 		case "reputation.otx":
@@ -768,7 +982,7 @@ func (a *App) Set(key, value string) error {
 		case "risk.provider":
 			p := risk.NormalizeProvider(value)
 			if p == "" {
-				return errors.New("risk.provider must be nvd or custom")
+				return errors.New("risk.provider must be nvd, cisa-kev, or custom")
 			}
 			c.Risk.Provider = p
 		case "risk.endpoint":

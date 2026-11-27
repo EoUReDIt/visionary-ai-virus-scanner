@@ -23,6 +23,7 @@ type ProviderInfo struct {
 	Name          string `json:"name"`
 	Endpoint      string `json:"endpoint"`
 	KeyOptional   bool   `json:"key_optional"`
+	KeyBadge      string `json:"key_badge"`
 	RateLimitHint string `json:"rate_limit_hint"`
 	DocsURL       string `json:"docs_url"`
 	DocsHint      string `json:"docs_hint"`
@@ -35,15 +36,27 @@ var Providers = []ProviderInfo{
 		Name:          "NIST NVD CVE 2.0",
 		Endpoint:      DefaultNVDEndpoint,
 		KeyOptional:   true,
+		KeyBadge:      "No key required · Optional free key",
 		RateLimitHint: "Free without key (5 req/30s) · Free NIST API key lifts limit to 50 req/30s",
 		DocsURL:       "https://nvd.nist.gov/developers/vulnerabilities",
 		DocsHint:      "Search 250,000+ CVEs and CISA Known Exploited Vulnerabilities (KEV) for free via services.nvd.nist.gov/rest/json/cves/2.0.",
+	},
+	{
+		ID:            "cisa-kev",
+		Name:          "CISA KEV Catalog (Static JSON)",
+		Endpoint:      DefaultCISAKEVEndpoint,
+		KeyOptional:   true,
+		KeyBadge:      "No key required · Zero rate limit",
+		RateLimitHint: "Direct static JSON download from CISA — no API key and no request rate limit",
+		DocsURL:       "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+		DocsHint:      "Fetches CISA's official Known Exploited Vulnerabilities catalog directly with zero API key or quota limits.",
 	},
 	{
 		ID:            "custom",
 		Name:          "Custom HTTP/JSON Risk Feed",
 		Endpoint:      "",
 		KeyOptional:   true,
+		KeyBadge:      "No key required",
 		RateLimitHint: "Accepts NVD 2.0 JSON or a compact JSON advisory list from any HTTPS endpoint",
 		DocsURL:       "https://nvd.nist.gov/developers/vulnerabilities",
 		DocsHint:      "Point Visionary at an internal or third-party HTTP/API vulnerability feed to guide where and how scans run.",
@@ -55,6 +68,8 @@ func NormalizeProvider(p string) string {
 	switch strings.ToLower(strings.TrimSpace(p)) {
 	case "", "nvd", "nist", "nvd-cve":
 		return "nvd"
+	case "cisa", "kev", "cisa-kev", "cisa_kev":
+		return "cisa-kev"
 	case "custom", "http", "json":
 		return "custom"
 	default:

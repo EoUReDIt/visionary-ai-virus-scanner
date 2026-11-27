@@ -154,6 +154,8 @@ func (o *OTX) LookupDetail(ctx context.Context, sha256 string) (malicious, total
 // LookupBatch deduplicates hashes, satisfies cache hits with zero network
 // calls, and queries only uncached hashes while stopping cleanly on rate limit.
 func (o *OTX) LookupBatch(ctx context.Context, hashes []string) map[string]LookupResult {
+	o.cache.BeginBatch()
+	defer o.cache.EndBatch()
 	out := make(map[string]LookupResult, len(hashes))
 	var uncached []string
 	seen := map[string]bool{}

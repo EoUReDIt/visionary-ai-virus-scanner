@@ -81,7 +81,8 @@ type AI struct {
 }
 
 type Reputation struct {
-	Provider    string `json:"provider,omitempty"`      // virustotal | otx | both
+	Provider    string `json:"provider,omitempty"`      // circl | virustotal | otx | both
+	CIRCL       bool   `json:"circl,omitempty"`         // keyless CIRCL hashlookup (NSRL known-good)
 	VirusTotal  bool   `json:"virustotal"`
 	OTX         bool   `json:"otx,omitempty"`
 	OTXLastSync string `json:"otx_last_sync,omitempty"` // RFC3339 cursor for compact incremental OTX feed export
@@ -89,14 +90,15 @@ type Reputation struct {
 
 // Enabled reports whether any Threat Exchange hash reputation provider is active.
 func (r Reputation) Enabled() bool {
-	return r.VirusTotal || r.OTX
+	return r.CIRCL || r.VirusTotal || r.OTX || r.Provider == "circl" || r.Provider == ""
 }
 
-// RiskExchange configures HTTP/API vulnerability feeds (such as NIST NVD CVE 2.0)
-// that guide where Visionary checks and how aggressively it scans.
+// RiskExchange configures HTTP/API vulnerability feeds (NIST NVD CVE 2.0,
+// CISA KEV catalog, or custom JSON) that guide where Visionary checks and how
+// aggressively it scans.
 type RiskExchange struct {
 	Enabled        bool   `json:"enabled"`
-	Provider       string `json:"provider,omitempty"`      // nvd | custom
+	Provider       string `json:"provider,omitempty"`      // nvd | cisa-kev | custom
 	Endpoint       string `json:"endpoint,omitempty"`      // optional custom HTTP/JSON endpoint
 	KEVOnly        bool   `json:"kev_only"`                // focus on CISA Known Exploited Vulnerabilities
 	MinSeverity    string `json:"min_severity,omitempty"`  // CRITICAL | HIGH | MEDIUM | LOW

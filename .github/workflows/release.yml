@@ -87,6 +87,8 @@ jobs:
             .\dist\visionary.exe version
             .\dist\visionary.exe status
             .\dist\visionary.exe ai status
+            .\dist\visionary.exe risk guidance --json | Out-Null
+            .\dist\visionary.exe reputation provider | Out-Null
             .\dist\visionary.exe scan .\scripts --json | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Core edition smoke scan failed (exit $LASTEXITCODE)" }
           }
@@ -94,6 +96,8 @@ jobs:
             $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-lite"
             .\dist\visionary-lite.exe version
             .\dist\visionary-lite.exe status
+            .\dist\visionary-lite.exe risk guidance --json | Out-Null
+            .\dist\visionary-lite.exe reputation provider | Out-Null
             .\dist\visionary-lite.exe scan .\scripts --json | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Lite edition smoke scan failed (exit $LASTEXITCODE)" }
           }
@@ -102,6 +106,8 @@ jobs:
             .\dist\visionary-safe.exe version
             .\dist\visionary-safe.exe status
             .\dist\visionary-safe.exe ai status
+            .\dist\visionary-safe.exe risk guidance --json | Out-Null
+            .\dist\visionary-safe.exe reputation provider | Out-Null
             .\dist\visionary-safe.exe scan .\scripts --json | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Safe edition smoke scan failed (exit $LASTEXITCODE)" }
           }

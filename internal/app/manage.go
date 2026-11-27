@@ -10,7 +10,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/ai"
@@ -279,7 +281,7 @@ func (a *App) SetSecret(name, value string) error {
 		case "virustotal":
 			c.Reputation.VirusTotal = value != ""
 			if value != "" {
-				if c.Reputation.Provider == "" {
+				if c.Reputation.Provider == "" || c.Reputation.Provider == "circl" {
 					c.Reputation.Provider = "virustotal"
 				} else if c.Reputation.Provider == "otx" && c.Reputation.OTX {
 					c.Reputation.Provider = "both"
@@ -288,7 +290,7 @@ func (a *App) SetSecret(name, value string) error {
 		case "otx":
 			c.Reputation.OTX = value != ""
 			if value != "" {
-				if c.Reputation.Provider == "" {
+				if c.Reputation.Provider == "" || c.Reputation.Provider == "circl" {
 					c.Reputation.Provider = "otx"
 				} else if c.Reputation.Provider == "virustotal" && c.Reputation.VirusTotal {
 					c.Reputation.Provider = "both"
@@ -420,6 +422,13 @@ type HashScanReport struct {
 	Items       []HashScanItem `json:"items"`
 }
 
+var hashBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 32<<10)
+		return &b
+	},
+}
+
 func sha256File(path string) (string, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -427,7 +436,9 @@ func sha256File(path string) (string, int64, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, 256<<20))
+	bufp := hashBufPool.Get().(*[]byte)
+	n, err := io.CopyBuffer(h, io.LimitReader(f, 256<<20), *bufp)
+	hashBufPool.Put(bufp)
 	if err != nil {
 		return "", 0, err
 	}
@@ -448,6 +459,7 @@ func DefaultDownloadsDir() string {
 // Exchange provider (VirusTotal, AlienVault OTX, or Both) using SHA-256 only.
 // Files are never uploaded.
 func (a *App) BatchHashScan(ctx context.Context, target string, maxFiles int) (*HashScanReport, error) {
+	defer debug.FreeOSMemory()
 	target = strings.TrimSpace(target)
 	if target == "" {
 		target = DefaultDownloadsDir()
@@ -470,9 +482,12 @@ func (a *App) BatchHashScan(ctx context.Context, target string, maxFiles int) (*
 		maxFiles = 500
 	}
 
-	repCache := reputation.OpenCache(config.Path("reputation_cache.json"))
+	repCache := a.reputationCache()
 	provName := a.ActiveReputationProvider()
 	var repList []reputation.Provider
+	if provName == "circl" {
+		repList = append(repList, reputation.NewCIRCLWithCache(repCache))
+	}
 	if provName == "otx" || provName == "both" {
 		if key := secure.Secret("otx"); key != "" {
 			repList = append(repList, reputation.NewOTXWithCache(key, repCache))
@@ -484,7 +499,7 @@ func (a *App) BatchHashScan(ctx context.Context, target string, maxFiles int) (*
 		}
 	}
 	if len(repList) == 0 {
-		return nil, errors.New("no Threat Exchange API key configured yet (add a VirusTotal or AlienVault OTX key first)")
+		return nil, errors.New("no Threat Exchange API key configured yet (switch to free keyless 'circl' or add a VirusTotal / AlienVault OTX key)")
 	}
 	var provider reputation.Provider
 	if len(repList) == 1 {
@@ -548,14 +563,18 @@ func (a *App) BatchHashScan(ctx context.Context, target string, maxFiles int) (*
 		}
 		seen[f.sha256] = true
 		unique = append(unique, f.sha256)
-		if _, ok := repCache.Get("otx", f.sha256); ok && (provName == "otx" || provName == "both") {
+		if _, ok := repCache.Get("circl", f.sha256); ok && provName == "circl" {
+			wasCached[f.sha256] = true
+		} else if _, ok := repCache.Get("otx", f.sha256); ok && (provName == "otx" || provName == "both") {
 			wasCached[f.sha256] = true
 		} else if _, ok := repCache.Get("virustotal", f.sha256); ok && (provName == "virustotal" || provName == "both") {
 			wasCached[f.sha256] = true
 		}
 	}
 	rep.UniqueHash = len(unique)
+	repCache.BeginBatch()
 	results := provider.LookupBatch(ctx, unique)
+	repCache.EndBatch()
 
 	for h, r := range results {
 		if wasCached[h] {

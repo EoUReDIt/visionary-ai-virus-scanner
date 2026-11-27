@@ -2,7 +2,7 @@
 
 - **Proposed Branch:** `perf/memory-and-runtime-optimizations`
 - **Target Branch:** `main`
-- **Status:** Proposal
+- **Status:** Implemented
 - **Editions Affected:** Core, Lite (highest impact), Safe
 
 ---

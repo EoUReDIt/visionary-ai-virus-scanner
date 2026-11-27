@@ -165,7 +165,11 @@ var packerSections = map[string]string{"upx0": "UPX", "upx1": "UPX", ".vmp0": "V
 	".nsp0": "NsPack"}
 
 func analyzePE(data []byte) (*PEInfo, []Finding) {
-	f, err := pe.NewFile(bytes.NewReader(data))
+	return analyzePEReader(bytes.NewReader(data))
+}
+
+func analyzePEReader(r io.ReaderAt) (*PEInfo, []Finding) {
+	f, err := pe.NewFile(r)
 	if err != nil {
 		return nil, []Finding{{"heuristic", "malformed-pe", 10, "has an MZ header but does not parse as a PE: " + err.Error()}}
 	}
@@ -199,10 +203,15 @@ func analyzePE(data []byte) (*PEInfo, []Finding) {
 
 	packer := ""
 	highExec := false
+	const maxSectionSample = 2 << 20
 	for _, s := range f.Sections {
 		ps := PESection{Name: s.Name, Size: s.Size, Exec: s.Characteristics&0x20000000 != 0}
-		if raw, err := s.Data(); err == nil {
-			ps.Entropy = entropy(raw)
+		if sr := s.Open(); sr != nil {
+			// Cap per-section entropy reads to 2 MiB so huge .rsrc / overlay
+			// sections in installers or games never spike scan RAM.
+			if raw, err := io.ReadAll(io.LimitReader(sr, maxSectionSample)); err == nil && len(raw) > 0 {
+				ps.Entropy = entropy(raw)
+			}
 		}
 		if p := packerSections[strings.ToLower(s.Name)]; p != "" {
 			packer = p
@@ -263,7 +272,11 @@ func analyzePE(data []byte) (*PEInfo, []Finding) {
 // platform, which is what lets the certificate blocklist run in tests and on
 // offline disks; whether Windows *trusts* the chain is asked separately.
 func signers(data []byte) []Signer {
-	f, err := pe.NewFile(bytes.NewReader(data))
+	return signersReader(bytes.NewReader(data), int64(len(data)))
+}
+
+func signersReader(r io.ReaderAt, totalSize int64) []Signer {
+	f, err := pe.NewFile(r)
 	if err != nil {
 		return nil
 	}
@@ -280,15 +293,20 @@ func signers(data []byte) []Signer {
 		}
 	}
 	// The security directory's "address" is a file offset, not an RVA.
-	off, size := int(dir.VirtualAddress), int(dir.Size)
-	if size <= 8 || off <= 0 || off+size > len(data) {
+	off, size := int64(dir.VirtualAddress), int64(dir.Size)
+	const maxCertBlob = 4 << 20
+	if size <= 8 || off <= 0 || size > maxCertBlob || off+size > totalSize {
 		return nil
 	}
-	certLen := int(binary.LittleEndian.Uint32(data[off:]))
-	if certLen <= 8 || certLen > size {
+	blob := make([]byte, size)
+	if _, err := r.ReadAt(blob, off); err != nil {
 		return nil
 	}
-	p7, err := pkcs7.Parse(data[off+8 : off+certLen])
+	certLen := int(binary.LittleEndian.Uint32(blob[:4]))
+	if certLen <= 8 || int64(certLen) > size {
+		return nil
+	}
+	p7, err := pkcs7.Parse(blob[8:certLen])
 	if err != nil {
 		return nil
 	}
@@ -364,7 +382,11 @@ const (
 // scanZip scans archive members in memory. The limits exist so a crafted
 // archive cannot exhaust memory or time (decompression bombs are reported).
 func (e *Engine) scanZip(data []byte, depth int, res *Result) {
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	e.scanZipReader(bytes.NewReader(data), int64(len(data)), depth, res)
+}
+
+func (e *Engine) scanZipReader(r io.ReaderAt, size int64, depth int, res *Result) {
+	zr, err := zip.NewReader(r, size)
 	if err != nil {
 		return
 	}

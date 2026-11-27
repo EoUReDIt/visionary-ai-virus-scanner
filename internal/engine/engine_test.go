@@ -180,3 +180,55 @@ func TestLOLBinBehaviorNotDiscounted(t *testing.T) {
 	}
 }
 
+func TestLargeFileStreamingScan(t *testing.T) {
+	e, dir := setup(t)
+	// Create a 5 MiB file (> 4 MiB head limit) and verify full-file SHA-256 is
+	// computed accurately while content scanning stays bounded to headLimit.
+	payload := bytes.Repeat([]byte("A1B2C3D4"), (5<<20)/8)
+	want := sha256.Sum256(payload)
+	p := put(t, dir, "installer.bin", payload)
+
+	r := e.ScanFile(context.Background(), p, Options{NoCache: true})
+	if r.Verdict != Clean {
+		t.Fatalf("expected clean, got %s (%v)", r.Verdict, r.Findings)
+	}
+	if r.SHA256 != hex.EncodeToString(want[:]) {
+		t.Fatalf("full-file SHA256 mismatch: got %s want %s", r.SHA256, hex.EncodeToString(want[:]))
+	}
+	foundPartial := false
+	for _, f := range r.Findings {
+		if f.Name == "partial-content-scan" {
+			foundPartial = true
+		}
+	}
+	if !foundPartial {
+		t.Fatalf("expected partial-content-scan note for 5 MiB file, got %v", r.Findings)
+	}
+}
+
+func TestCacheBoundedEviction(t *testing.T) {
+	e, _ := setup(t)
+	e.Cfg.Profile = "lite" // 25,000 cap
+	e.cacheMu.Lock()
+	for i := 0; i < 26000; i++ {
+		rev := e.DB.Manifest.Revision
+		if i < 500 {
+			rev = rev - 1 // stale revision
+		}
+		e.cache[filepath.Join("f", string(rune(i/1000+65)), strings.Repeat("x", 4)+string(rune(i%1000)))] = cacheEntry{
+			Size: 100, Mod: int64(i), Rev: rev,
+		}
+	}
+	// Ensure exact count exceeds cap even if rune keys collide.
+	for i := 0; len(e.cache) <= e.cacheMaxEntries()+500; i++ {
+		e.cache[filepath.Join("extra", hex.EncodeToString([]byte{byte(i >> 8), byte(i)}))] = cacheEntry{
+			Size: 100, Mod: int64(100000 + i), Rev: e.DB.Manifest.Revision,
+		}
+	}
+	e.evictCacheLocked(e.DB.Manifest.Revision)
+	got := len(e.cache)
+	e.cacheMu.Unlock()
+	if got > e.cacheMaxEntries() {
+		t.Fatalf("cache size %d exceeds cap %d", got, e.cacheMaxEntries())
+	}
+}

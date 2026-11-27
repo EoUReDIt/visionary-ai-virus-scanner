@@ -98,17 +98,31 @@ const DEF_PRESETS = [
 
 const REPUTATION_PROVIDERS = [
   {
+    id: "circl",
+    name: "CIRCL hashlookup (Free · No Key)",
+    secret_name: "",
+    key_required: false,
+    key_badge: "No key required",
+    docs_url: "https://hashlookup.circl.lu/",
+    docs_hint: "Keyless NSRL/RDS known-good SHA-256 reference lookups via hashlookup.circl.lu to suppress false positives out of the box.",
+    supports_bulk_sync: false,
+  },
+  {
     id: "virustotal",
     name: "VirusTotal",
     secret_name: "virustotal",
+    key_required: true,
+    key_badge: "Free API key required",
     docs_url: "https://www.virustotal.com/gui/my-apikey",
-    docs_hint: "Multi-engine SHA-256 hash lookups via VirusTotal API v3 (x-apikey). Cached on disk to save daily quota.",
+    docs_hint: "Multi-engine SHA-256 hash lookups via VirusTotal API v3 (x-apikey). Cached locally to save daily quota.",
     supports_bulk_sync: false,
   },
   {
     id: "otx",
     name: "AlienVault OTX",
     secret_name: "otx",
+    key_required: true,
+    key_badge: "Free API key required",
     docs_url: "https://otx.alienvault.com/api",
     docs_hint: "Open Threat Exchange DirectConnect API v1 (X-OTX-API-KEY). Supports compact per-hash pulse lookups and bulk SHA-256 feed sync.",
     supports_bulk_sync: true,
@@ -117,6 +131,8 @@ const REPUTATION_PROVIDERS = [
     id: "both",
     name: "VirusTotal + AlienVault OTX",
     secret_name: "",
+    key_required: true,
+    key_badge: "Free API keys required",
     docs_url: "https://otx.alienvault.com/api",
     docs_hint: "Checks AlienVault OTX first (higher rate limit) and falls back to VirusTotal only when needed, stopping on the first confirmed threat.",
     supports_bulk_sync: true,
@@ -129,20 +145,66 @@ const RISK_PROVIDERS = [
     name: "NIST NVD CVE 2.0",
     endpoint: "https://services.nvd.nist.gov/rest/json/cves/2.0",
     key_optional: true,
+    key_badge: "No key required · Optional free key",
     rate_limit_hint: "Free without key (5 req/30s) · Free NIST API key lifts limit to 50 req/30s",
     docs_url: "https://nvd.nist.gov/developers/vulnerabilities",
     docs_hint: "Search 250,000+ CVEs and CISA Known Exploited Vulnerabilities (KEV) for free via services.nvd.nist.gov/rest/json/cves/2.0.",
+  },
+  {
+    id: "cisa-kev",
+    name: "CISA KEV Catalog (Static JSON)",
+    endpoint: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    key_optional: true,
+    key_badge: "No key required · Zero rate limit",
+    rate_limit_hint: "Direct static JSON download from CISA — no API key and no request rate limit",
+    docs_url: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+    docs_hint: "Fetches CISA's official Known Exploited Vulnerabilities catalog directly with zero API key or quota limits.",
   },
   {
     id: "custom",
     name: "Custom HTTP/JSON Risk Feed",
     endpoint: "",
     key_optional: true,
+    key_badge: "No key required",
     rate_limit_hint: "Accepts NVD 2.0 JSON or a compact JSON advisory list from any HTTPS endpoint",
     docs_url: "https://nvd.nist.gov/developers/vulnerabilities",
     docs_hint: "Point Visionary at an internal or third-party HTTP/API vulnerability feed to guide where and how scans run.",
   },
 ];
+
+const ipCache = new Map<string, Record<string, unknown>>();
+
+function validatePublicIPv4(raw: string): { ip?: string; error?: string } {
+  const s = String(raw || "").trim();
+  if (!s) return { error: "internetdb: enter a public IPv4 address" };
+  if (s.includes(":")) return { error: "internetdb: only public IPv4 addresses are supported" };
+  const parts = s.split(".");
+  if (parts.length !== 4 || parts.some((p) => !/^\d{1,3}$/.test(p))) {
+    return { error: `internetdb: invalid IP address "${s}"` };
+  }
+  const oct = parts.map(Number);
+  if (oct.some((n) => n < 0 || n > 255)) {
+    return { error: `internetdb: invalid IP address "${s}"` };
+  }
+  const [a, b, c] = oct;
+  const isBlocked =
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0 && c === 2) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113) ||
+    a >= 224;
+  if (isBlocked) {
+    return { error: "internetdb: private/local IP addresses are blocked locally (behind-home-network scope)" };
+  }
+  return { ip: oct.join(".") };
+}
 
 const nowIso = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString();
 
@@ -506,6 +568,7 @@ function buildStatus(withWindows: boolean) {
     risk_posture: "critical",
     risk_kevs: state.risk_state.advisories.filter((a) => a.kev).length,
     risk_targets: 3,
+    cache_backend: "json",
     quarantined: state.quarantine.length,
     behavior_learning: state.config.behavior.learning,
     behavior: state.behavior,
@@ -891,6 +954,7 @@ app.get("/api/ai", (_req: Request, res: Response) => {
       otx: state.secrets.otx,
     },
     otx_last_sync: state.config.reputation.otx_last_sync,
+    cache_backend: "json",
     recommended: RECOMMENDED_LOCAL,
     models: state.ollama_models,
     ollama: "running",
@@ -946,8 +1010,8 @@ app.post("/api/ai", async (req: Request, res: Response) => {
       return res.json({ ok: true });
     case "reputation-provider": {
       const p = String(value || "").toLowerCase();
-      if (p !== "virustotal" && p !== "otx" && p !== "both") {
-        return res.status(400).json({ error: "provider must be virustotal, otx, or both" });
+      if (p !== "circl" && p !== "virustotal" && p !== "otx" && p !== "both") {
+        return res.status(400).json({ error: "provider must be circl, virustotal, otx, or both" });
       }
       state.config.reputation.provider = p;
       logEvent("system", "info", `Threat Exchange provider set to ${p}`);
@@ -955,6 +1019,7 @@ app.post("/api/ai", async (req: Request, res: Response) => {
     }
     case "reputation-key": {
       if (!String(key || "").trim()) return res.status(400).json({ error: "paste an API key" });
+      if (name === "circl") return res.status(400).json({ error: "CIRCL hashlookup requires no API key" });
       const prov = name === "otx" ? "otx" : "virustotal";
       state.secrets[prov] = true;
       if (prov === "otx") state.config.reputation.otx = true;
@@ -963,6 +1028,7 @@ app.post("/api/ai", async (req: Request, res: Response) => {
       return res.json({ ok: true });
     }
     case "reputation-clear-key": {
+      if (name === "circl") return res.status(400).json({ error: "CIRCL hashlookup has no stored API key" });
       const prov = name === "otx" ? "otx" : "virustotal";
       state.secrets[prov] = false;
       if (prov === "otx") state.config.reputation.otx = false;
@@ -992,6 +1058,54 @@ app.post("/api/ai", async (req: Request, res: Response) => {
     }
     case "hash-scan": {
       const target = String(fpath || "").trim() || "C:\\Users\\Analyst\\Downloads";
+      if (state.config.reputation.provider === "circl") {
+        return res.json({
+          target,
+          provider: "CIRCL hashlookup (No Key)",
+          files: 3,
+          unique_hashes: 3,
+          cache_hits: 1,
+          live_queries: 2,
+          malicious: 0,
+          suspicious: 0,
+          clean: 2,
+          unknown: 1,
+          items: [
+            {
+              path: `${target}\\7z2409-x64.exe`,
+              sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              size: 1621400,
+              verdict: "clean",
+              malicious: 0,
+              total: 100,
+              label: "7z2409-x64.exe",
+              detail: "Known-good reference file on CIRCL hashlookup (NSRL/RDS)",
+              cached: true,
+            },
+            {
+              path: `${target}\\VSCodeUserSetup-x64.exe`,
+              sha256: "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
+              size: 98421100,
+              verdict: "clean",
+              malicious: 0,
+              total: 100,
+              label: "VSCodeUserSetup-x64.exe",
+              detail: "Known-good reference file on CIRCL hashlookup (NSRL/RDS)",
+              cached: false,
+            },
+            {
+              path: `${target}\\packed-utility-setup.exe`,
+              sha256: "9b74c9897bac770ffc029102a200c5de5e9835b7c74a4d3020a79a6a12d5e801",
+              size: 4218880,
+              verdict: "unknown",
+              malicious: 0,
+              total: 0,
+              detail: "hash not seen on CIRCL hashlookup (No Key)",
+              cached: false,
+            },
+          ],
+        });
+      }
       const prov = state.config.reputation.provider === "otx" ? "AlienVault OTX" : state.config.reputation.provider === "both" ? "AlienVault OTX + VirusTotal" : "VirusTotal";
       return res.json({
         target,
@@ -1244,6 +1358,7 @@ app.get("/api/risk", (_req: Request, res: Response) => {
     provider: state.config.risk.provider,
     providers: RISK_PROVIDERS,
     key_set: state.secrets.nvd,
+    cache_backend: "json",
     state: state.risk_state,
     guidance: {
       posture: kevCount > 0 ? "critical" : critCount > 0 ? "elevated" : "standard",
@@ -1268,7 +1383,7 @@ app.post("/api/risk", (req: Request, res: Response) => {
   const { action, value, key, kind, all } = req.body || {};
   switch (action) {
     case "provider":
-      state.config.risk.provider = value === "custom" ? "custom" : "nvd";
+      state.config.risk.provider = value === "custom" ? "custom" : value === "cisa-kev" ? "cisa-kev" : "nvd";
       return res.json({ ok: true });
     case "endpoint":
       state.config.risk.endpoint = String(value || "").trim();
@@ -1281,7 +1396,8 @@ app.post("/api/risk", (req: Request, res: Response) => {
       return res.json({ ok: true });
     case "sync":
       state.risk_state.synced_at = nowIso();
-      logEvent("system", "info", `Risk Exchange synced ${state.risk_state.advisories.length} advisories from NIST NVD CVE 2.0`);
+      state.risk_state.provider = state.config.risk.provider;
+      logEvent("system", "info", `Risk Exchange synced ${state.risk_state.advisories.length} advisories from ${state.config.risk.provider.toUpperCase()}`);
       return res.json({
         state: state.risk_state,
         guidance: { posture: "critical", kev_count: state.risk_state.advisories.filter((a) => a.kev).length },
@@ -1296,6 +1412,43 @@ app.post("/api/risk", (req: Request, res: Response) => {
         return a.id.toLowerCase().includes(q) || a.summary.toLowerCase().includes(q) || a.products.some((p) => p.toLowerCase().includes(q));
       });
       return res.json({ total: filtered.length, advisories: filtered });
+    }
+    case "ip-check": {
+      const check = validatePublicIPv4(String(value || ""));
+      if (check.error || !check.ip) {
+        return res.status(400).json({ error: check.error || "invalid public IPv4 address" });
+      }
+      const ip = check.ip;
+      const prev = ipCache.get(ip);
+      if (prev) {
+        return res.json({ ...prev, cached: true });
+      }
+      const sample = ip === "1.1.1.1" || ip === "8.8.8.8"
+        ? {
+            ip,
+            source: "internetdb",
+            ports: [53, 443],
+            risky_ports: [],
+            vulns: [],
+            hostnames: [ip === "1.1.1.1" ? "one.one.one.one" : "dns.google"],
+            risk_level: "low",
+            summary: "2 open ports indexed, no CVEs or high-risk administrative ports.",
+            cached: false,
+          }
+        : {
+            ip,
+            source: "internetdb",
+            ports: [80, 443, 3389],
+            risky_ports: ["3389 (RDP)"],
+            vulns: ["CVE-2024-38077"],
+            hostnames: [],
+            risk_level: "critical",
+            summary: "1 risky exposed port (3389 (RDP)) and 1 indexed CVE — verify router firewall & port forwarding.",
+            cached: false,
+          };
+      ipCache.set(ip, sample);
+      logEvent("system", sample.risk_level === "critical" ? "high" : "info", `InternetDB check ${ip} (${sample.risk_level}): ${sample.summary}`);
+      return res.json(sample);
     }
     case "scan-guided": {
       const err = startSimulatedScan("risk-guided", undefined, true, false);

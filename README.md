@@ -2,9 +2,24 @@
 
 A lightweight Windows antivirus built for solo developers, power users, and gamers — **one binary, CLI first, local Web UI second**.
 
-Visionary layers fast local detection (packed SHA-256/SHA-1/MD5 hash sets, YARA-subset rules, static PE/script heuristics, Authenticode certificate verification, and behavioural/LOLBin monitoring) with optional **local AI** (models under 3B parameters via Ollama or `llama.cpp`), optional **cloud AI** (Google Gemini, Anthropic Claude, or OpenAI-compatible APIs via your own key), a hash-only **Threat Exchange** (VirusTotal and AlienVault OTX), and a **Risk Exchange** (NIST NVD CVE 2.0) that tells the scanner where to check and how aggressively to scan.
+Visionary layers fast local detection (packed SHA-256/SHA-1/MD5 hash sets, YARA-subset rules, static PE/script heuristics, Authenticode certificate verification, and behavioural/LOLBin monitoring) with optional **local AI** (models under 3B parameters via Ollama or `llama.cpp`), optional **cloud AI** (Google Gemini, Anthropic Claude, or OpenAI-compatible APIs via your own key), a hash-only **Threat Exchange** (keyless CIRCL hashlookup by default, plus optional VirusTotal and AlienVault OTX), and a keyless **Risk Exchange** (NIST NVD CVE 2.0, CISA KEV catalog, and Shodan InternetDB home-perimeter IP check) that tells the scanner where to check and how aggressively to scan.
 
 > **Status:** v0.2.0. Built and `go vet` / `go test` verified across all three editions (**Safe**, **Lite**, **Core**) in GitHub Actions on Ubuntu and Windows runners. Treat Visionary as a second layer alongside Microsoft Defender, not a replacement.
+
+---
+
+## Quick Start (Neurodiverse-Friendly)
+
+Short, predictable, no surprise popups. Pick **one** starting step:
+
+1. **Install one file:** Download `Visionary-Lite-Setup` (quietest, lowest RAM) or `Visionary-Safe-Setup` (fewest Windows alerts) from **Releases** and run it.
+2. **Open the dashboard:** Launch **Visionary** from the Start menu (or run `visionary ui`). Everything stays in one local browser tab (`127.0.0.1`) — no accounts, no banners, no upsells.
+3. **Run one scan:** Click **Quick Scan** (or run `visionary scan quick`). Wait for the summary:
+   - **Clean** — nothing to do.
+   - **Suspicious** — nothing is deleted automatically; click **Explain with AI** (or `visionary ai explain <file>`) for a plain-English summary before deciding.
+   - **Malicious** — moved safely to **Quarantine** where you can restore it anytime.
+4. **Need zero interruptions?** Click **Pause Protection** (15m / 1h / until restart) or switch to the **Lite** or **Gamer** profile (`visionary profile lite`).
+5. **Everything else is optional:** Local AI, Cloud AI, Threat Exchange, and Risk Exchange are all opt-in. You can ignore them until you want them.
 
 ---
 
@@ -34,9 +49,9 @@ See [docs/LITE.md](docs/LITE.md) and [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md
 | 6 | Local AI (<3B) with auto-unload | `visionary ai local pull\|use\|gguf\|load\|unload`, `settings set ai.local.keep_alive 0s\|2m` |
 | 7 | Cloud AI (Gemini / Claude / OpenAI) | `visionary ai cloud provider gemini\|claude\|openai`, `ai cloud set-key` (DPAPI encrypted) |
 | 8 | AI Sensitivity & LOLBin Triage | `visionary ai sensitivity conservative\|balanced\|proactive`, `ai explain <file>` |
-| 9 | Threat Exchange (VirusTotal / AlienVault OTX) | `visionary reputation provider virustotal\|otx\|both`, `set-key`, `sync-otx` |
+| 9 | Threat Exchange (CIRCL keyless / VT / OTX) | `visionary reputation provider circl\|virustotal\|otx\|both`, `set-key`, `sync-otx` |
 | 10 | Download & Batch Folder Hash Scanner | `visionary reputation scan [path] [--limit 50]` (SHA-256 only, never uploads files) |
-| 11 | Risk Exchange (NIST NVD CVE 2.0 + Custom) | `visionary risk sync\|guidance\|search <query>\|provider nvd\|custom` |
+| 11 | Risk Exchange (NVD / CISA KEV / InternetDB) | `visionary risk sync\|guidance\|search <query>\|ip <public-ipv4>\|provider nvd\|cisa-kev\|custom` |
 | 12 | Behaviour baseline learning | `visionary behavior learn [--days 3]`, `stop-learning`, `status` |
 | 13 | Pause / resume protection | `visionary protection disable --for 15m\|1h\|restart\|permanent`, `enable` |
 | 14 | Gamer / Dev / Lite profiles & Game Mode | `visionary profile balanced\|gamer\|dev\|lite`, `visionary gamemode auto\|on\|off` |
@@ -66,9 +81,9 @@ allowlist -> clean cache -> hash definitions -> YARA-subset rules
 
 - **Conservative scoring:** Score `>= 80` is malicious, `>= 40` is suspicious. Heuristics are capped at `75` and can never convict alone.
 - **Privacy first:**
-  - **Threat Exchange** (VirusTotal & AlienVault OTX) sends **SHA-256 hashes only** — user files are never uploaded. Lookups are cached on disk (`reputation_cache.json`) so known hashes cost zero API calls, and batch scans pace live VirusTotal queries to stay within the free 4 req/min limit.
+  - **Threat Exchange** defaults to keyless **CIRCL hashlookup** (NSRL/RDS known-good SHA-256 reference lookups) and upgrades seamlessly to **VirusTotal** or **AlienVault OTX** when you add a free key. It sends **SHA-256 hashes only** — user files are never uploaded. Lookups are cached locally in the unified cache store (`visionary_cache.db` with `-tags sqlite`, or atomic `visionary_cache.json` by default) so known hashes cost zero API calls, and batch scans pace live VirusTotal queries to stay within the free 4 req/min limit.
   - **AI models** receive a structured feature report (metadata, imports, findings, process lineage), never the raw file. Cloud script-snippet sharing is off by default.
-- **Risk-Guided Scanning:** **Risk Exchange** syncs active CVEs and CISA Known Exploited Vulnerabilities (KEV) from NIST NVD CVE 2.0 (free without an API key at 5 req/30s; optional free NIST key lifts to 50 req/30s) and translates them into concrete scan posture and priority Windows software/folder targets for Quick Scans.
+- **Risk-Guided Scanning & Home Perimeter Check:** **Risk Exchange** syncs active CVEs and CISA Known Exploited Vulnerabilities (KEV) from **NIST NVD CVE 2.0** (free without an API key at 5 req/30s; optional free NIST key lifts to 50 req/30s) or directly from **CISA's static KEV JSON catalog** (zero key, zero rate limit), translating them into scan posture and priority Windows software/folder targets. An opt-in **Shodan InternetDB** lookup (`visionary risk ip <public-ipv4>`) checks a router WAN or outbound public IP with zero key while strictly blocking all private LAN / RFC 1918 / loopback addresses locally.
 - **Local AI Memory Control:** Set `ai.local.keep_alive` to `0s` (unload immediately after each triage), `30s`, `1m`, `2m` (Lite default), or `15m`, or trigger an immediate **Unload model now** from the Web UI or CLI (`visionary ai local unload`). Applies to both Ollama and managed `llama-server` processes.
 
 ---
@@ -96,6 +111,9 @@ Downloads resume, verify hub SHA-256 checksums, inspect actual GGUF tensor count
 go vet ./... && go test ./...
 go vet -tags lite ./... && go test -tags lite ./...
 go vet -tags safe ./... && go test -tags safe ./...
+# Optional: enable embedded pure-Go WAL SQLite cache (visionary_cache.db)
+go get modernc.org/sqlite && go build -tags sqlite ./cmd/visionary
+
 sh scripts/build.sh 0.2.0
 
 # On Windows (builds PE metadata, binaries, portable ZIPs, NSIS installers & SHA256SUMS.txt)
@@ -113,11 +131,12 @@ npm run dev
 Visionary integrates with and builds upon ideas from the following providers, API guides, and open-source projects:
 
 ### Threat Exchange & Risk Exchange Providers
+- **CIRCL hashlookup** — Keyless NSRL/RDS known-good SHA-256 lookup (`https://hashlookup.circl.lu/lookup/sha256/{sha256}`) enabled as the zero-key Threat Exchange default to suppress heuristic false positives.
 - **NIST National Vulnerability Database (NVD CVE 2.0 API)** — Free vulnerability & CISA KEV search (`https://services.nvd.nist.gov/rest/json/cves/2.0`; 250,000+ CVEs, free without an API key at 5 req/30s or 50 req/30s with a free NIST API key). Docs: `https://nvd.nist.gov/developers/vulnerabilities`.
-- **CISA Known Exploited Vulnerabilities (KEV) Catalog** — Actively exploited vulnerability metadata surfaced inside NVD advisories to prioritize scan posture and targets.
-- **VirusTotal API v3** — Hash-only multi-engine file reputation lookups (`GET /api/v3/files/{sha256}`), Download Scanner, and rate-limit-paced Batch Folder Hash Scanner (`https://www.virustotal.com/`).
-- **LevelBlue / AlienVault Open Threat Exchange (OTX)** — DirectConnect API v1 (`https://otx.alienvault.com/api`) for per-hash pulse lookups and compact incremental SHA-256 bulk feed export (`/api/v1/indicators/export`).
-- **Shodan InternetDB** *(evaluated / proposed in `docs/proposals/`)* — Keyless public IP exposure & CVE lookup (`https://internetdb.shodan.io/{ip}`) for opt-in home-router WAN perimeter and outbound public IP checks.
+- **CISA Known Exploited Vulnerabilities (KEV) Catalog** — Direct static JSON download (`https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json`, zero key, zero rate limit) as well as KEV flags inside NVD advisories.
+- **Shodan InternetDB** — Keyless public IPv4 exposure & CVE lookup (`https://internetdb.shodan.io/{ip}`) for opt-in home-router WAN perimeter and outbound public IP checks, with a strict local RFC 1918 / private-IP guard.
+- **VirusTotal API v3** — Optional free-key hash-only multi-engine file reputation lookups (`GET /api/v3/files/{sha256}`), Download Scanner, and rate-limit-paced Batch Folder Hash Scanner (`https://www.virustotal.com/`).
+- **LevelBlue / AlienVault Open Threat Exchange (OTX)** — Optional free-key DirectConnect API v1 (`https://otx.alienvault.com/api`) for per-hash pulse lookups and compact incremental SHA-256 bulk feed export (`/api/v1/indicators/export`).
 
 ### Articles & Technical Guides Referenced
 - **NVD Free CVE 2.0 API Guide** — [NVD Has a Free API: Search 250,000+ Vulnerabilities Programmatically (dev.to / 0012303)](https://dev.to/0012303/nvd-has-a-free-api-search-250000-vulnerabilities-programmatically-4aem) — informed the Risk Exchange NIST NVD 2.0 client, `cveId`/`keywordSearch`/`cvssV3Severity`/`hasKev` filters, and keyless rate-limit guidance.
@@ -127,7 +146,7 @@ Visionary integrates with and builds upon ideas from the following providers, AP
 
 ### AI Runtimes, Security APIs & Formats
 - **Local AI:** [Ollama](https://ollama.com/), [llama.cpp (`llama-server`)](https://github.com/ggml-org/llama.cpp), and [Hugging Face Hub](https://huggingface.co/) (GGUF model discovery and verified downloads).
-- **Cloud AI (BYOK):** Google Gemini API, Anthropic Claude (`anthropic-sdk-go`), and OpenAI-compatible Chat Completions endpoints.
+- **Cloud AI (BYOK):** Google Gemini API, Anthropic Claude (Messages API), and OpenAI-compatible Chat Completions endpoints.
 - **Windows & Signatures:** Microsoft Defender AMSI / `MpCmdRun` coexistence documentation, [ClamAV](https://www.clamav.net/) `.hdb`/`.hsb`/`.cvd` signature formats, and [YARA](https://virustotal.github.io/yara/) rule syntax.
 
 ### Reference Repositories Studied

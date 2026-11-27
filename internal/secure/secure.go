@@ -98,7 +98,9 @@ func saveSecrets(m map[string]string) error {
 
 // envNames maps a secret to the environment variable that overrides it.
 var envNames = map[string]string{
+	"gemini":      "GEMINI_API_KEY",
 	"anthropic":   "ANTHROPIC_API_KEY",
+	"openai":      "OPENAI_API_KEY",
 	"virustotal":  "VISIONARY_VT_KEY",
 	"otx":         "OTX_API_KEY",
 	"nvd":         "NVD_API_KEY",

@@ -585,26 +585,26 @@ section.on{display:block}
               <button class="b" id="bOtxSync">Sync OTX hash feed</button>
             </div>
           </div>
-          <div class="row">
+          <div class="row" id="rKeyRow">
             <input type="password" id="kRep" placeholder="Paste Threat Exchange API key (encrypted at rest)" autocomplete="off" aria-label="Threat Exchange API key">
             <button class="b p" id="bRepKey">Save key</button>
             <button class="b d" id="bRepClr">Remove key</button>
           </div>
-          <div class="muted" id="rQuotaNote">Only SHA-256 digests are queried and results are cached on disk to save API quota. Files are never uploaded.</div>
+          <div class="muted" id="rQuotaNote">Only SHA-256 digests are queried and results are cached locally to save API quota. Files are never uploaded.</div>
           <div class="row" style="margin-top:12px">
             <input type="text" id="bHashPath" placeholder="Optional folder or file path (blank = Downloads folder)" aria-label="Folder or file path for batch hash scan">
             <button class="b" id="bHashDownloads">Scan Downloads (hash-only)</button>
             <button class="b" id="bHashBatch">Batch hash scan</button>
           </div>
           <div id="bHashOut"></div>
-          <span class="cli" id="rCli">visionary reputation provider otx &nbsp;·&nbsp; visionary reputation set-key otx &nbsp;·&nbsp; visionary reputation scan</span>
+          <span class="cli" id="rCli">visionary reputation provider circl &nbsp;·&nbsp; visionary reputation scan</span>
         </div>
       </section>
 
       <!-- RISK EXCHANGE -->
       <section id="risk">
         <h1>Risk Exchange</h1>
-        <p class="lead">Connect HTTP/API vulnerability feeds — starting with NIST's free NVD CVE 2.0 API (250,000+ CVEs, no key required) — to guide where Visionary looks and how aggressively it scans.</p>
+        <p class="lead">Connect free keyless vulnerability feeds — NIST NVD CVE 2.0 (250,000+ CVEs), CISA's static KEV JSON catalog, and Shodan InternetDB for home-router WAN IP exposure — to guide where Visionary looks and how aggressively it scans.</p>
 
         <h2>Active Scan Guidance (Where &amp; How to Scan)</h2>
         <div class="grid" id="rkCards"></div>
@@ -643,15 +643,15 @@ section.on{display:block}
           <div class="row">
             <label class="chk"><input type="checkbox" id="rkAuto"> Auto-prioritize Quick Scans using active Risk Exchange targets &amp; deep escalation</label>
           </div>
-          <div class="row">
+          <div class="row" id="rkNvdKeyRow">
             <input type="password" id="kNvd" placeholder="Optional free NIST NVD API key (lifts 5 req/30s -> 50 req/30s)" autocomplete="off" aria-label="Optional NIST NVD API key">
             <button class="b" id="bNvdKey">Save optional key</button>
             <button class="b d" id="bNvdClr">Clear key</button>
           </div>
-          <span class="cli">visionary risk sync &nbsp;·&nbsp; visionary risk guidance &nbsp;·&nbsp; visionary risk search chrome --kev</span>
+          <span class="cli">visionary risk sync &nbsp;·&nbsp; visionary risk provider cisa-kev &nbsp;·&nbsp; visionary risk search chrome --kev</span>
         </div>
 
-        <h2>Search 250,000+ CVEs (Free NVD 2.0 API)</h2>
+        <h2>Search CVEs (Keyless NVD 2.0 / CISA KEV)</h2>
         <div class="card">
           <div class="row">
             <input type="text" id="rkQ" placeholder="Software keyword or CVE ID (e.g. chrome, 7-zip, powershell, CVE-2021-44228)" aria-label="Search CVEs">
@@ -667,6 +667,17 @@ section.on{display:block}
           </div>
           <div class="meta-line" id="rkMeta" style="margin:8px 0"></div>
           <div class="tablewrap" id="rkTable"></div>
+        </div>
+
+        <h2>Home Perimeter / Outbound IP Check (Shodan InternetDB · No Key)</h2>
+        <div class="card">
+          <div class="muted" style="margin-bottom:8px">Check a public IPv4 address (such as your router's WAN IP or an unfamiliar outbound remote IP) for exposed ports and indexed CVEs with zero API key. Private LAN addresses (<code>192.168.x.x</code>, <code>10.x.x.x</code>, <code>172.16.x.x</code>, <code>127.0.0.1</code>) are strictly blocked locally and never leave your PC.</div>
+          <div class="row">
+            <input type="text" id="rkIp" placeholder="Public IPv4 address (e.g. 1.1.1.1 or your router WAN IP)" aria-label="Public IPv4 address to check with Shodan InternetDB">
+            <button class="b p" id="bRkIp">Check public IP</button>
+          </div>
+          <div id="rkIpOut"></div>
+          <span class="cli">visionary risk ip &lt;public-ipv4&gt;</span>
         </div>
       </section>
 
@@ -1118,7 +1129,7 @@ function overview(s) {
     ["01", "Hash & YARA", d.hashes.toLocaleString() + " hashes · " + d.rules + " rules", "Active", "t-ok", "definitions"],
     ["02", "Static & Certs", "PE entropy, imports, WinVerifyTrust", "Active", "t-ok", "scan"],
     ["03", "Behaviour & LOLBin", s.behavior_learning ? "Learning baseline" : (s.behavior.parent_child_edges + " launch pairs"), s.behavior_learning ? "Learning" : "Active", s.behavior_learning ? "t-info" : "t-ok", "behaviour"],
-    ["04", "Defender & Exchange", (s.windows_security && s.windows_security.available ? "Defender AMSI" : "Local rules") + (s.virustotal_key_set && s.otx_key_set ? " + VT & OTX" : (s.otx_key_set ? " + OTX" : (s.virustotal_key_set ? " + VT" : ""))), s.virustotal_key_set || s.otx_key_set || (s.windows_security && s.windows_security.available) ? "Ready" : "Standby", "t-info", "ai"],
+    ["04", "Defender & Exchange", (s.windows_security && s.windows_security.available ? "Defender AMSI" : "Local rules") + (s.reputation_provider === "circl" ? " + CIRCL (No Key)" : (s.virustotal_key_set && s.otx_key_set ? " + VT & OTX" : (s.otx_key_set ? " + OTX" : (s.virustotal_key_set ? " + VT" : "")))), s.reputation_provider === "circl" || s.virustotal_key_set || s.otx_key_set || (s.windows_security && s.windows_security.available) ? "Ready" : "Standby", "t-info", "ai"],
     ["05", "Local AI (<3B)", s.local_model || "No local model active", localOn ? "Active" : "Standby", localOn ? "t-ok" : "t-muted", "ai"],
     ["06", "Cloud AI", s.cloud_provider ? (s.cloud_provider + (s.cloud_model ? " · " + s.cloud_model : "")) : "Gemini / Claude / OpenAI", cloudOn ? "Active" : "Standby", cloudOn ? "t-ok" : "t-muted", "ai"]
   ];
@@ -1410,37 +1421,44 @@ async function aiTab() {
   if (!$("mRec").options.length) {
     fill($("mRec"), (a.recommended || []).map(m => el("option", { value: m.Model }, m.Model + " — " + m.Params + ", " + m.About)));
   }
-  /* Threat Exchange picker (VirusTotal / AlienVault OTX / Both) */
+  /* Threat Exchange picker (CIRCL keyless / VirusTotal / AlienVault OTX / Both) */
   const repProvs = a.reputation_providers || [
-    { id: "virustotal", name: "VirusTotal", docs_hint: "Multi-engine SHA-256 hash lookups via VirusTotal API v3" },
-    { id: "otx", name: "AlienVault OTX", docs_hint: "Open Threat Exchange DirectConnect API v1 (otx.alienvault.com/api)" },
-    { id: "both", name: "VirusTotal + AlienVault OTX", docs_hint: "Checks OTX first and falls back to VirusTotal only when needed" }
+    { id: "circl", name: "CIRCL hashlookup (Free · No Key)", key_required: false, key_badge: "No key required", docs_hint: "Keyless NSRL/RDS known-good SHA-256 reference lookups via hashlookup.circl.lu" },
+    { id: "virustotal", name: "VirusTotal", key_required: true, key_badge: "Free API key required", docs_hint: "Multi-engine SHA-256 hash lookups via VirusTotal API v3" },
+    { id: "otx", name: "AlienVault OTX", key_required: true, key_badge: "Free API key required", docs_hint: "Open Threat Exchange DirectConnect API v1 (otx.alienvault.com/api)" },
+    { id: "both", name: "VirusTotal + AlienVault OTX", key_required: true, key_badge: "Free API keys required", docs_hint: "Checks OTX first and falls back to VirusTotal only when needed" }
   ];
-  const repProv = a.reputation_provider || "virustotal";
+  const repProv = a.reputation_provider || "circl";
   const repKeys = a.reputation_keys || { virustotal: !!a.vt_key_set, otx: false };
   fill($("rProv"), repProvs.map(p => el("option", { value: p.id }, p.name)));
   $("rProv").value = repProv;
   const activeRep = repProvs.find(p => p.id === repProv) || repProvs[0];
-  const repReady = repProv === "otx" ? !!repKeys.otx : (repProv === "both" ? (!!repKeys.otx || !!repKeys.virustotal) : !!repKeys.virustotal);
+  const isKeylessRep = repProv === "circl" || activeRep.key_required === false;
+  const repReady = isKeylessRep ? true : (repProv === "otx" ? !!repKeys.otx : (repProv === "both" ? (!!repKeys.otx || !!repKeys.virustotal) : !!repKeys.virustotal));
   const repKeySummary = [
+    el("span", { style: "margin-right:12px" }, "CIRCL: ", el("span", { class: "st t-ok" }, "no key required")),
     el("span", { style: "margin-right:12px" }, "VirusTotal: ", el("span", { class: "st " + (repKeys.virustotal ? "t-ok" : "t-muted") }, repKeys.virustotal ? "key stored" : "not set")),
     el("span", { style: "margin-right:12px" }, "AlienVault OTX: ", el("span", { class: "st " + (repKeys.otx ? "t-ok" : "t-muted") }, repKeys.otx ? "key stored" : "not set")),
+    a.cache_backend ? el("span", { style: "margin-right:12px" }, "Cache: ", el("span", { class: "st t-info" }, a.cache_backend)) : null,
     a.otx_last_sync ? el("span", { class: "muted" }, "OTX feed synced " + when(a.otx_last_sync)) : null
   ].filter(Boolean);
   fill($("aRep"),
     el("div", {}, el("b", {}, activeRep.name), " — ",
-      el("span", { class: "st " + (repReady ? "t-ok" : "t-muted") }, repReady ? "ready" : "API key required")),
+      el("span", { class: "st " + (repReady ? "t-ok" : "t-muted") }, isKeylessRep ? "no key required · ready" : (repReady ? "ready" : (activeRep.key_badge || "API key required")))),
     activeRep.docs_hint && el("div", { class: "muted", style: "margin-top:3px" }, activeRep.docs_hint),
     el("div", { class: "meta-line", style: "margin-top:6px" }, repKeySummary));
+  $("rKeyRow").hidden = isKeylessRep;
   $("rKeyTargetWrap").hidden = repProv !== "both";
-  if (repProv !== "both") $("rKeyTarget").value = repProv;
+  if (repProv === "otx" || repProv === "virustotal") $("rKeyTarget").value = repProv;
   const keyTarget = repProv === "both" ? $("rKeyTarget").value : repProv;
   $("kRep").placeholder = (keyTarget === "otx" ? "AlienVault OTX API key (X-OTX-API-KEY)" : "VirusTotal API key (x-apikey)") + " — encrypted at rest";
   $("rOtxSyncWrap").hidden = !(repProv === "otx" || repProv === "both");
   $("bOtxSync").disabled = !repKeys.otx;
-  $("rCli").textContent = repProv === "virustotal"
-    ? "visionary reputation provider virustotal  ·  visionary reputation set-key virustotal"
-    : "visionary reputation provider " + repProv + "  ·  visionary reputation set-key otx  ·  visionary reputation sync-otx";
+  $("rCli").textContent = repProv === "circl"
+    ? "visionary reputation provider circl  ·  visionary reputation scan"
+    : repProv === "virustotal"
+      ? "visionary reputation provider virustotal  ·  visionary reputation set-key virustotal  ·  visionary reputation scan"
+      : "visionary reputation provider " + repProv + "  ·  visionary reputation set-key otx  ·  visionary reputation sync-otx";
 }
 
 $("aMode").onchange = e => act(() => api("/api/ai", { action: "mode", value: e.target.value }), "AI mode updated");
@@ -1551,15 +1569,19 @@ async function riskTab() {
   const st = r.state || { advisories: [] };
   const provs = r.providers || [];
 
+  const activeProvId = r.provider || "nvd";
+  const syncSub = activeProvId === "cisa-kev"
+    ? ("CISA KEV static JSON · cache: " + (r.cache_backend || "json"))
+    : (r.key_set ? "NIST API key active (50 req/30s)" : "Free keyless tier (5 req/30s)") + " · cache: " + (r.cache_backend || "json");
   const postCls = g.posture === "critical" ? "t-bad" : g.posture === "elevated" ? "t-warn" : "t-ok";
   fill($("rkCards"),
     card("Scan posture", el("span", { class: postCls }, (g.posture || "standard").toUpperCase()), g.recommend_deep ? "Deep + AI escalation recommended" : "Standard scan posture"),
     card("CISA KEV active", String(g.kev_count || 0), (g.critical_count || 0) + " Critical · " + (g.high_count || 0) + " High"),
     card("Priority targets", String((g.priority_targets || []).length), "Mapped to local scan folders"),
-    card("Last synced", st.synced_at ? when(st.synced_at) : "Never", r.key_set ? "NIST API key active (50 req/30s)" : "Free keyless tier (5 req/30s)"));
+    card("Last synced", st.synced_at ? when(st.synced_at) : "Never", syncSub));
 
   fill($("rkGuidance"),
-    el("div", {}, el("b", {}, "How this guides scans: "), g.reason || "Sync advisories from NIST NVD to prioritize affected software folders."));
+    el("div", {}, el("b", {}, "How this guides scans: "), g.reason || "Sync advisories from NIST NVD or CISA KEV to prioritize affected software folders."));
 
   fill($("rkTargets"), table(["Affected software", "Severity", "Matched CVEs", "Priority scan locations"], (g.priority_targets || []).map(t => el("tr", {},
     el("td", {}, el("b", {}, t.product), t.kev ? [" · ", el("span", { class: "st t-bad" }, "KEV")] : null),
@@ -1569,16 +1591,20 @@ async function riskTab() {
     "No priority software targets mapped yet — click Sync advisories now."));
 
   fill($("rkProv"), provs.map(p => el("option", { value: p.id }, p.name)));
-  $("rkProv").value = r.provider || "nvd";
+  $("rkProv").value = activeProvId;
   $("rkSev").value = cfg.min_severity || "HIGH";
   $("rkKev").checked = cfg.kev_only !== false;
   $("rkAuto").checked = cfg.auto_prioritize !== false;
-  $("rkEndpointRow").hidden = $("rkProv").value !== "custom";
+  $("rkEndpointRow").hidden = activeProvId !== "custom";
+  $("rkNvdKeyRow").hidden = activeProvId !== "nvd";
   $("rkEndpoint").value = cfg.endpoint || "";
-  const active = provs.find(p => p.id === (r.provider || "nvd")) || provs[0];
+  const active = provs.find(p => p.id === activeProvId) || provs[0];
+  const badgeText = activeProvId === "nvd" && r.key_set
+    ? "API key stored (50 req/30s)"
+    : (active && active.key_badge ? active.key_badge : "no key required");
   fill($("rkProvInfo"),
     el("div", {}, el("b", {}, active ? active.name : "NIST NVD CVE 2.0"), " — ",
-      el("span", { class: "st t-ok" }, r.key_set ? "API key stored (50 req/30s)" : "free tier ready (no key required)")),
+      el("span", { class: "st t-ok" }, badgeText)),
     active && el("div", { class: "muted", style: "margin-top:3px" }, active.docs_hint),
     active && el("div", { class: "meta-line", style: "margin-top:4px" }, active.rate_limit_hint));
 
@@ -1612,6 +1638,31 @@ $("bRkSearch").onclick = async e => {
   } catch (err) {
     toast(err.message, true);
     fill($("rkTable"));
+  } finally {
+    e.target.disabled = false;
+  }
+};
+$("bRkIp").onclick = async e => {
+  const ip = $("rkIp").value.trim();
+  if (!ip) { toast("Enter a public IPv4 address", true); return; }
+  fill($("rkIpOut"), el("div", { class: "bar" }, el("i")));
+  try {
+    e.target.disabled = true;
+    const r = await api("/api/risk", { action: "ip-check", value: ip });
+    const cls = r.risk_level === "critical" ? "t-bad" : r.risk_level === "elevated" ? "t-warn" : "t-ok";
+    fill($("rkIpOut"), el("div", { class: "ai-box" },
+      el("div", { class: "ai-head" },
+        el("b", { style: "font-family:var(--mono)" }, r.ip),
+        el("span", { class: "st " + cls }, (r.risk_level || "low").toUpperCase()),
+        el("span", { class: "meta-line" }, r.cached ? "cached (24h)" : "live InternetDB")),
+      el("div", { class: "ai-summary" }, r.summary),
+      (r.ports && r.ports.length) ? el("div", { class: "find" }, el("span", { class: "find-layer" }, "PORTS"), r.ports.join(", ")) : null,
+      (r.risky_ports && r.risky_ports.length) ? el("div", { class: "find t-warn" }, el("span", { class: "find-layer" }, "RISKY"), r.risky_ports.join(", ")) : null,
+      (r.vulns && r.vulns.length) ? el("div", { class: "find t-bad" }, el("span", { class: "find-layer" }, "CVES"), r.vulns.slice(0, 12).join(", ")) : null,
+      (r.hostnames && r.hostnames.length) ? el("div", { class: "find" }, el("span", { class: "find-layer" }, "HOSTS"), r.hostnames.join(", ")) : null));
+  } catch (err) {
+    toast(err.message, true);
+    fill($("rkIpOut"), el("div", { class: "note t-warn" }, err.message));
   } finally {
     e.target.disabled = false;
   }
