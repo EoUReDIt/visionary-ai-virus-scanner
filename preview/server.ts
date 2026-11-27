@@ -334,8 +334,35 @@ function hasActiveCloudKey() {
   return Boolean(state.secrets[state.config.ai.cloud.provider]);
 }
 
+function computeTrayStatus(): { tray_state: "active" | "paused" | "warning"; tray_label: string; tray_detail: string } {
+  const lowReason = (state.protection_reason || "").toLowerCase();
+  if (!state.protection && lowReason.includes("re-enabled")) {
+    return { tray_state: "warning", tray_label: "Warning: Protection Off", tray_detail: "Real-time protection is turned off" };
+  }
+  if (!state.protection) {
+    const r = state.protection_reason || "Real-time protection is temporarily paused";
+    return { tray_state: "paused", tray_label: "Protection Paused", tray_detail: r.charAt(0).toUpperCase() + r.slice(1) };
+  }
+  if (!state.guard_running) {
+    return { tray_state: "warning", tray_label: "Warning: Guard Offline", tray_detail: "Real-time protection service is not running" };
+  }
+  if (state.quarantine.length > 0) {
+    const n = state.quarantine.length;
+    return {
+      tray_state: "warning",
+      tray_label: n === 1 ? "Warning: 1 Threat Quarantined" : `Warning: ${n} Threats Quarantined`,
+      tray_detail: n === 1 ? "1 quarantined file awaiting review" : `${n} quarantined files awaiting review`,
+    };
+  }
+  if (state.config.game_mode.forced) {
+    return { tray_state: "active", tray_label: "Protected (Game Mode)", tray_detail: "Real-time protection active at background priority" };
+  }
+  return { tray_state: "active", tray_label: "Protected", tray_detail: "Real-time AI protection is active" };
+}
+
 function buildStatus(withWindows: boolean) {
   const mode = state.config.ai.mode;
+  const tray = computeTrayStatus();
   return {
     version: state.version,
     edition: state.edition,
@@ -361,6 +388,7 @@ function buildStatus(withWindows: boolean) {
     admin: state.admin,
     data_dir: state.data_dir,
     windows_security: withWindows ? state.windows_security : undefined,
+    ...tray,
   };
 }
 

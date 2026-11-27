@@ -153,9 +153,11 @@ func main() {
 		return
 	}
 	// VisionaryUI.exe is this program linked without a console window: the
-	// Start-menu shortcut. With no arguments it opens the dashboard.
-	if exe, _ := os.Executable(); len(argv) == 0 && strings.HasPrefix(strings.ToLower(filepath.Base(exe)), "visionaryui") {
-		if err := serveUI(interruptible(), a, 0, true, true); err != nil {
+	// Start-menu shortcut and Windows sign-in tray launcher.
+	if exe, _ := os.Executable(); strings.HasPrefix(strings.ToLower(filepath.Base(exe)), "visionaryui") &&
+		(len(argv) == 0 || (len(argv) == 1 && argv[0] == "--tray")) {
+		openBrowser := len(argv) == 0
+		if err := serveUI(interruptible(), a, 0, openBrowser, true); err != nil {
 			a.Log("system", "warn", "Dashboard could not start: "+err.Error(), nil)
 		}
 		return
@@ -214,9 +216,10 @@ func main() {
 	case "ui":
 		port := fs.Int("port", 0, "port to listen on")
 		noOpen := fs.Bool("no-open", false, "do not open a browser window")
+		trayOnly := fs.Bool("tray", false, "start minimized to the system tray")
 		noGuard := fs.Bool("no-guard", false, "do not run real-time protection inside the dashboard process")
 		parse(fs, rest)
-		check(serveUI(interruptible(), a, *port, !*noOpen, !*noGuard))
+		check(serveUI(interruptible(), a, *port, !*noOpen && !*trayOnly, !*noGuard))
 	case "protection":
 		cmdProtection(a, fs, rest)
 	case "gamemode":

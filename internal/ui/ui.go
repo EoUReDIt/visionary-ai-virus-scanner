@@ -29,6 +29,7 @@ import (
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/plat"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/secure"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/tray"
 )
 
 //go:embed index.html
@@ -54,6 +55,13 @@ type server struct {
 	job   job
 	dl    download
 	ctx   context.Context
+	tray  *tray.Controller
+}
+
+func (s *server) notifyTray() {
+	if s.tray != nil {
+		s.tray.Refresh()
+	}
 }
 
 // download is the one model download the dashboard runs at a time.
@@ -200,7 +208,10 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 	if _, err := rand.Read(raw); err != nil {
 		return err
 	}
-	s := &server{a: a, token: hex.EncodeToString(raw), host: ln.Addr().String(), ctx: ctx}
+	uiCtx, cancelUI := context.WithCancel(ctx)
+	defer cancelUI()
+
+	s := &server{a: a, token: hex.EncodeToString(raw), host: ln.Addr().String(), ctx: uiCtx}
 	dashURL := fmt.Sprintf("http://%s/#t=%s", s.host, s.token)
 
 	_ = os.WriteFile(uiURLFile(), []byte(dashURL), 0o600)
@@ -212,6 +223,38 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 			_ = os.Remove(p)
 		}
 	}()
+
+	s.tray = tray.Start(uiCtx, tray.Callbacks{
+		Status: func() tray.Info {
+			s.a.Reload()
+			return tray.Compute(s.a.Status(false))
+		},
+		OnOpen: func() {
+			_ = plat.OpenBrowser(dashURL)
+		},
+		OnQuickScan: func() {
+			_ = s.startScan("quick", nil, true, false)
+			_ = plat.OpenBrowser(dashURL + "&tab=scan")
+		},
+		OnPause: func(forArg string) error {
+			d, err := time.ParseDuration(forArg)
+			if err != nil {
+				d = 15 * time.Minute
+			}
+			return s.a.Disable("timed", d, "")
+		},
+		OnResume: func() error {
+			return s.a.Enable()
+		},
+		OnToggleGameMode: func() error {
+			if s.a.GameMode() {
+				return s.a.SetGameMode("off")
+			}
+			return s.a.SetGameMode("on")
+		},
+		OnQuit: cancelUI,
+	})
+	defer s.tray.Close()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.index)
@@ -234,7 +277,10 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
 	if guard && !app.GuardAlive() {
-		go func() { _ = a.RunGuard(ctx, nil) }()
+		go func() {
+			_ = a.RunGuard(uiCtx, nil)
+			s.notifyTray()
+		}()
 	}
 	// Full-screen detection has to happen in the user's session; this
 	// process is in it, a service is not.
@@ -243,16 +289,17 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 		defer t.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-uiCtx.Done():
 				return
 			case <-t.C:
 				a.Reload()
 				a.GameMode()
+				s.notifyTray()
 			}
 		}
 	}()
 	go func() {
-		<-ctx.Done()
+		<-uiCtx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shut)
@@ -312,6 +359,8 @@ func (s *server) api(h func(*http.Request) (any, error)) http.HandlerFunc {
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			out = map[string]string{"error": err.Error()}
+		} else if r.Method == http.MethodPost {
+			s.notifyTray()
 		}
 		if out == nil {
 			out = map[string]bool{"ok": true}
@@ -351,9 +400,23 @@ func body(r *http.Request) (req, error) {
 	return q, nil
 }
 
+type statusResponse struct {
+	*app.Status
+	TrayState  tray.State `json:"tray_state"`
+	TrayLabel  string     `json:"tray_label"`
+	TrayDetail string     `json:"tray_detail"`
+}
+
 func (s *server) status(r *http.Request) (any, error) {
 	s.a.Reload()
-	return s.a.Status(r.URL.Query().Get("windows") == "1"), nil
+	st := s.a.Status(r.URL.Query().Get("windows") == "1")
+	ti := tray.Compute(st)
+	return statusResponse{
+		Status:     st,
+		TrayState:  ti.State,
+		TrayLabel:  ti.Label,
+		TrayDetail: ti.Detail,
+	}, nil
 }
 
 func (s *server) scan(r *http.Request) (any, error) {
@@ -361,18 +424,22 @@ func (s *server) scan(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return nil, s.startScan(q.Kind, q.Paths, q.Deep, q.Quarantine)
+}
+
+func (s *server) startScan(kind string, paths []string, deep, quarantine bool) error {
 	j := &s.job
 	j.mu.Lock()
 	if j.Running {
 		j.mu.Unlock()
-		return nil, errors.New("a scan is already running")
+		return errors.New("a scan is already running")
 	}
-	if q.Kind == "targeted" && len(q.Paths) == 0 {
+	if kind == "targeted" && len(paths) == 0 {
 		j.mu.Unlock()
-		return nil, errors.New("enter a file or folder to scan")
+		return errors.New("enter a file or folder to scan")
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
-	j.Running, j.Kind, j.Files, j.Current, j.Detections, j.Summary, j.Error = true, q.Kind, 0, "", nil, nil, ""
+	j.Running, j.Kind, j.Files, j.Current, j.Detections, j.Summary, j.Error = true, kind, 0, "", nil, nil, ""
 	j.cancel = cancel
 	j.mu.Unlock()
 
@@ -389,16 +456,16 @@ func (s *server) scan(r *http.Request) (any, error) {
 	}
 	go func() {
 		defer cancel()
-		opts := app.ScanOptions{Deep: q.Deep, Quarantine: q.Quarantine}
+		opts := app.ScanOptions{Deep: deep, Quarantine: quarantine}
 		var sum *engine.Summary
 		var err error
-		switch q.Kind {
+		switch kind {
 		case "quick":
 			sum = s.a.QuickScan(ctx, opts, progress)
 		case "boot":
 			sum = s.a.BootScan(ctx, false, progress)
 		case "targeted":
-			sum, err = s.a.TargetedScan(ctx, q.Paths, opts, progress)
+			sum, err = s.a.TargetedScan(ctx, paths, opts, progress)
 		default:
 			err = errors.New("unknown scan kind")
 		}
@@ -413,8 +480,9 @@ func (s *server) scan(r *http.Request) (any, error) {
 			j.Error = err.Error()
 		}
 		j.mu.Unlock()
+		s.notifyTray()
 	}()
-	return nil, nil
+	return nil
 }
 
 func (s *server) jobState(*http.Request) (any, error) {

@@ -132,10 +132,11 @@ Section "${APP} (required)" SecCore
 
   SetOutPath "$INSTDIR"
 !ifdef LITE
-  ; Switching to Lite removes the dashboard binary and UI shortcuts.
+  ; Switching to Lite removes the dashboard binary, tray startup entry and UI shortcuts.
   Delete "$INSTDIR\VisionaryUI.exe"
   Delete "$SMPROGRAMS\Visionary\Visionary.lnk"
   Delete "$DESKTOP\Visionary.lnk"
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "VisionaryTray"
   File /oname=visionary.exe "${BINDIR}\visionary-lite.exe"
 !else
   !ifdef SAFE
@@ -206,6 +207,11 @@ Section "Add the visionary command to PATH" SecPath
 SectionEnd
 
 !ifndef LITE
+Section "System tray icon at sign-in" SecTray
+  ; Starts VisionaryUI minimized to the taskbar notification area on Windows sign-in.
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "VisionaryTray" '"$INSTDIR\VisionaryUI.exe" --tray'
+SectionEnd
+
 Section /o "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\Visionary.lnk" "$INSTDIR\VisionaryUI.exe"
 SectionEnd
@@ -227,6 +233,7 @@ SectionEnd
 !endif
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPath} "Use 'visionary' from any terminal immediately after installation."
 !ifndef LITE
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecTray} "Show the Visionary protection status icon in the Windows system tray automatically at sign-in."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A shortcut to the dashboard on the desktop."
 !endif
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
@@ -249,6 +256,7 @@ Section "Uninstall"
   RMDir /r "$SMPROGRAMS\Visionary Lite"
   Delete "$DESKTOP\Visionary.lnk"
   Delete "$DESKTOP\Visionary Lite.lnk"
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "VisionaryTray"
   DeleteRegKey HKLM "${UNINST_KEY}"
   DeleteRegKey HKLM "Software\VisionaryAV"
 

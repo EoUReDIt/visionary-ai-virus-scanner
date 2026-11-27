@@ -52,6 +52,7 @@ nav{
   width:28px;height:28px;border-radius:7px;display:grid;place-items:center;
   background:var(--accent-soft);color:var(--accent);flex:none;
 }
+.brand-mark.paused{background:var(--warn-soft);color:var(--warn)}
 .brand-mark.off{background:var(--bad-soft);color:var(--bad)}
 .brand-name{font-weight:700;letter-spacing:.08em;font-size:13px;line-height:1.1}
 .brand-sub{font-size:11px;color:var(--muted);line-height:1.2}
@@ -70,9 +71,42 @@ nav button:focus-visible,button:focus-visible,input:focus-visible,select:focus-v
 nav .nav-lbl{flex:1;min-width:0}
 nav .count{font:600 12px var(--mono);font-variant-numeric:tabular-nums;color:var(--bad)}
 nav .foot{
-  margin-top:auto;padding:12px 10px 4px;border-top:1px solid var(--border);
-  color:var(--muted);font-size:12px;display:flex;flex-direction:column;gap:2px;
+  margin-top:auto;padding:12px 6px 4px;border-top:1px solid var(--border);
+  color:var(--muted);font-size:12px;display:flex;flex-direction:column;gap:8px;position:relative;
 }
+.tray-btn{
+  box-sizing:border-box;display:flex;align-items:center;gap:9px;width:100%;padding:8px 9px;border-radius:8px;
+  background:var(--surface-2);border:1px solid var(--border);color:var(--text);cursor:pointer;
+  text-align:left;transition:border-color .12s,background .12s;
+}
+.tray-btn:hover{border-color:var(--border-strong);background:var(--surface-hover)}
+.tray-ico{
+  width:24px;height:24px;border-radius:6px;display:grid;place-items:center;flex:none;
+  background:var(--accent-soft);color:var(--accent);
+}
+.tray-ico svg{width:15px;height:15px;opacity:1}
+.tray-ico.paused{background:var(--warn-soft);color:var(--warn)}
+.tray-ico.warning{background:var(--bad-soft);color:var(--bad)}
+.tray-meta{min-width:0;flex:1}
+.tray-t{font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tray-s{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tray-pop{
+  position:fixed;left:14px;bottom:68px;width:248px;z-index:95;
+  background:var(--surface);border:1px solid var(--border-strong);border-radius:10px;
+  box-shadow:var(--shadow);padding:6px;display:none;
+}
+.tray-pop.open{display:block}
+.tray-head{padding:7px 9px 8px;border-bottom:1px solid var(--border);margin-bottom:4px}
+.tray-head-t{font-size:12.5px;font-weight:650;color:var(--text)}
+.tray-head-s{font-size:11.5px;color:var(--muted);margin-top:1px}
+.tray-item{
+  width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;
+  background:transparent;border:0;border-radius:6px;padding:7px 9px;cursor:pointer;
+  color:var(--text);font:inherit;font-size:13px;text-align:left;
+}
+.tray-item:hover{background:var(--surface-2)}
+.tray-item.primary{font-weight:600}
+.tray-sep{height:1px;background:var(--border);margin:4px 0}
 
 /* Main shell */
 .shell{flex:1;min-width:0;display:flex;flex-direction:column;height:100%}
@@ -110,6 +144,7 @@ p.lead{color:var(--muted);margin:0 0 18px;max-width:74ch;font-size:13.5px}
   width:52px;height:52px;border-radius:12px;display:grid;place-items:center;
   background:var(--accent-soft);color:var(--accent);flex:none;
 }
+.shield.paused{background:var(--warn-soft);color:var(--warn)}
 .shield.off{background:var(--bad-soft);color:var(--bad)}
 .hero .t{font-size:18px;font-weight:650;letter-spacing:-.01em}
 .hero .d{color:var(--muted);font-size:13.5px;margin-top:2px}
@@ -635,10 +670,13 @@ section.on{display:block}
   </div>
 </div>
 
+<div id="trayPop" class="tray-pop" role="menu" aria-label="System tray quick menu"></div>
+
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
 let token = (location.hash.match(/t=([0-9a-f]+)/) || [])[1];
+const initialTab = (location.hash.match(/tab=([a-z]+)/) || [])[1] || "overview";
 try { if (token) sessionStorage.setItem("vt", token); else token = sessionStorage.getItem("vt"); } catch (e) {}
 if (location.hash) history.replaceState(null, "", location.pathname);
 
@@ -832,18 +870,99 @@ function detectionActions(path, alreadyQuarantined) {
     } } }, "Allowlist"));
 }
 
+function shieldGlyph(state) {
+  if (state === "paused") return ["M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z", "M10 9.5v5", "M14 9.5v5"];
+  if (state === "warning") return ["M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z", "M12 8.5v4.5", "M12 16.5h.01"];
+  return ["M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z", "M9 12l2 2 4-4"];
+}
+
+function updateFavicon(trayState) {
+  const fillCol = trayState === "paused" ? "%23f59e0b" : trayState === "warning" ? "%23ef4444" : "%2310b981";
+  const fgCol = trayState === "paused" ? "%231e1304" : "%23ffffff";
+  const glyph = trayState === "paused"
+    ? `<path d='M9.5 9.5v5.5M14.5 9.5v5.5' stroke='${fgCol}' stroke-width='2.3' stroke-linecap='round'/>`
+    : trayState === "warning"
+      ? `<path d='M12 8.2v4.8M12 16.3h.01' stroke='${fgCol}' stroke-width='2.3' stroke-linecap='round'/>`
+      : `<path d='M8.5 12.2l2.3 2.3 4.7-4.8' fill='none' stroke='${fgCol}' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'/>`;
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2.5l8 3v6.2c0 5.1-3.5 8.2-8 9.8-4.5-1.6-8-4.7-8-9.8V5.5z' fill='${fillCol}'/>${glyph}</svg>`;
+  let link = document.querySelector("link[rel='icon']");
+  if (!link) {
+    link = document.createElement("link");
+    link.rel = "icon";
+    document.head.appendChild(link);
+  }
+  link.href = "data:image/svg+xml," + svg;
+}
+
+function deriveTray(s) {
+  if (s.tray_state) return { state: s.tray_state, label: s.tray_label || "", detail: s.tray_detail || "" };
+  const low = (s.protection_reason || "").toLowerCase();
+  if (!s.protection && low.includes("re-enabled")) return { state: "warning", label: "Warning: Protection Off", detail: "Real-time protection is turned off" };
+  if (!s.protection) return { state: "paused", label: "Protection Paused", detail: s.protection_reason || "Paused" };
+  if (!s.guard_running) return { state: "warning", label: "Warning: Guard Offline", detail: "Real-time service is not running" };
+  if (s.quarantined > 0) return { state: "warning", label: "Warning: " + s.quarantined + " Quarantined", detail: "Quarantined threats awaiting review" };
+  return { state: "active", label: s.game_mode ? "Protected (Game Mode)" : "Protected", detail: "Real-time AI protection is active" };
+}
+
+function closeTrayMenu() { $("trayPop").classList.remove("open"); }
+document.addEventListener("click", e => {
+  const pop = $("trayPop");
+  if (pop.classList.contains("open") && !pop.contains(e.target) && !e.target.closest("#trayTrigger")) closeTrayMenu();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeTrayMenu(); });
+
+function renderTrayMenu(s, tr) {
+  const pop = $("trayPop");
+  const item = (label, fn, opts) => el("button", Object.assign({
+    type: "button",
+    class: "tray-item" + (opts && opts.primary ? " primary" : ""),
+    role: "menuitem",
+    on: { click: () => { closeTrayMenu(); fn(); } }
+  }), el("span", {}, label), opts && opts.badge ? el("span", { class: "st " + opts.badgeCls }, opts.badge) : null);
+
+  fill(pop,
+    el("div", { class: "tray-head" },
+      el("div", { class: "tray-head-t" }, tr.label),
+      el("div", { class: "tray-head-s" }, tr.detail)),
+    item("Open Overview", () => show("overview"), { primary: true }),
+    item("Run Quick Scan", () => { show("scan"); setTimeout(() => startScan("quick", $("bQuick")), 50); }),
+    s.quarantined > 0 ? item("Review Quarantined Threats", () => show("threats"), { badge: String(s.quarantined), badgeCls: "t-bad" }) : null,
+    el("div", { class: "tray-sep" }),
+    s.protection
+      ? [
+          item("Pause Protection (15 min)", () => act(() => api("/api/protection", { action: "disable", for: "15m" }), "Protection paused for 15 minutes")),
+          item("Pause Protection (1 hour)", () => act(() => api("/api/protection", { action: "disable", for: "1h" }), "Protection paused for 1 hour"))
+        ]
+      : item("Resume Protection", () => act(() => api("/api/protection", { action: "enable" }), "Protection resumed"), { primary: true }),
+    item("Game Mode", () => act(() => api("/api/settings", { action: "gamemode", value: s.game_mode ? "off" : "on" }), s.game_mode ? "Game mode off" : "Game mode on"),
+      { badge: s.game_mode ? "ON" : "OFF", badgeCls: s.game_mode ? "t-ok" : "t-muted" })
+  );
+}
+
 async function refresh() {
   try {
     status = await api("/api/status" + (current === "overview" ? "?windows=1" : ""));
   } catch (e) { toast(e.message, true); return; }
   const s = status;
-  $("brandMark").className = "brand-mark" + (s.protection ? "" : " off");
+  const tr = deriveTray(s);
+  updateFavicon(tr.state);
+  $("brandMark").className = "brand-mark" + (tr.state === "paused" ? " paused" : tr.state === "warning" ? " off" : "");
+  fill($("brandMark"), icon(shieldGlyph(tr.state)));
   const edLabel = s.edition === "lite" ? "Lite Edition" : s.edition === "safe" ? "Safe Edition" : "Core AI Protection";
   $("brandSub").textContent = edLabel + (s.game_mode ? " · Game mode" : "");
-  $("topMeta").textContent = (s.protection ? "Protected" : "Paused") + " · AI " + (s.ai_mode || "off") + (s.ai_sensitivity ? " (" + s.ai_sensitivity + ")" : "");
+  $("topMeta").textContent = tr.label + " · AI " + (s.ai_mode || "off") + (s.ai_sensitivity ? " (" + s.ai_sensitivity + ")" : "");
+  renderTrayMenu(s, tr);
   fill($("foot"),
-    el("div", { class: "num" }, "v" + s.version + " · " + (s.profile || "balanced")),
-    el("div", {}, s.guard_running ? "Guard active" : "On-demand mode"));
+    el("button", {
+      type: "button", id: "trayTrigger", class: "tray-btn",
+      title: "System tray icon status — click for quick actions",
+      on: { click: () => $("trayPop").classList.toggle("open") }
+    },
+      el("span", { class: "tray-ico " + tr.state }, icon(shieldGlyph(tr.state))),
+      el("span", { class: "tray-meta" },
+        el("div", { class: "tray-t" }, "Tray: " + (tr.state === "active" ? "Active" : tr.state === "paused" ? "Paused" : "Warning")),
+        el("div", { class: "tray-s" }, tr.label))),
+    el("div", { class: "num", style: "padding:0 4px" }, "v" + s.version + " · " + (s.profile || "balanced")));
   const q = $("c-threats"); q.hidden = !s.quarantined; q.textContent = s.quarantined;
 
   if (current === "overview") overview(s);
@@ -857,9 +976,12 @@ async function refresh() {
 }
 
 function overview(s) {
-  $("shield").className = "shield" + (s.protection ? "" : " off");
-  $("tick").setAttribute("d", s.protection ? "M8.5 12l2.5 2.5 4.5-5" : "M9 9l6 6M15 9l-6 6");
-  $("protT").textContent = s.protection ? (s.guard_running ? "Real-time AI protection is active" : "Protection enabled — guard waiting") : "Real-time protection is off";
+  const tr = deriveTray(s);
+  $("shield").className = "shield" + (tr.state === "paused" ? " paused" : tr.state === "warning" ? " off" : "");
+  $("tick").setAttribute("d", tr.state === "paused" ? "M10 9.5v5M14 9.5v5" : tr.state === "warning" ? "M12 8.5v4.5M12 16.5h.01" : "M8.5 12l2.5 2.5 4.5-5");
+  $("protT").textContent = s.protection
+    ? (s.guard_running ? (s.quarantined > 0 ? "Protection active — " + s.quarantined + " threat(s) in quarantine" : "Real-time AI protection is active") : "Protection enabled — guard offline")
+    : (tr.state === "paused" ? "Real-time protection is paused" : "Real-time protection is off");
   $("protD").textContent = s.protection
     ? (s.guard_running ? "Monitoring new files, process launches, and LOLBin anomalies in real time." : "Keep this console open or install the Windows service so protection starts with Windows.")
     : (s.protection_reason || "Disabled") + ".";
@@ -1337,7 +1459,8 @@ $("eType").addEventListener("change", renderActivity);
 $("eSearch").addEventListener("input", renderActivity);
 
 /* Boot */
-api("/api/settings").then(r => { requirePw = r.config.security.require_password_to_disable; show("overview"); }).catch(() => { show("overview"); });
+const startTab = tabs.some(t => t[0] === initialTab) ? initialTab : "overview";
+api("/api/settings").then(r => { requirePw = r.config.security.require_password_to_disable; show(startTab); }).catch(() => { show(startTab); });
 setInterval(() => {
   const tag = document.activeElement && document.activeElement.tagName;
   if (!document.hidden && current !== "settings" && current !== "definitions" && current !== "ai" && tag !== "SELECT" && tag !== "INPUT") {
