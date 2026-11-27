@@ -2,8 +2,13 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,6 +18,7 @@ import (
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/defs"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/reputation"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/secure"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/winsec"
 )
@@ -262,7 +268,7 @@ func (a *App) UseGGUF(path, serverPath string) (float64, error) {
 }
 
 // SetSecret stores or clears an API key ("gemini", "anthropic", "openai",
-// "virustotal", or "huggingface").
+// "virustotal", "otx", or "huggingface").
 func (a *App) SetSecret(name, value string) error {
 	value = strings.TrimSpace(value)
 	if err := secure.SetSecret(name, value); err != nil {
@@ -272,6 +278,22 @@ func (a *App) SetSecret(name, value string) error {
 		switch name {
 		case "virustotal":
 			c.Reputation.VirusTotal = value != ""
+			if value != "" {
+				if c.Reputation.Provider == "" {
+					c.Reputation.Provider = "virustotal"
+				} else if c.Reputation.Provider == "otx" && c.Reputation.OTX {
+					c.Reputation.Provider = "both"
+				}
+			}
+		case "otx":
+			c.Reputation.OTX = value != ""
+			if value != "" {
+				if c.Reputation.Provider == "" {
+					c.Reputation.Provider = "otx"
+				} else if c.Reputation.Provider == "virustotal" && c.Reputation.VirusTotal {
+					c.Reputation.Provider = "both"
+				}
+			}
 		case "gemini", "anthropic", "openai":
 			prov := name
 			if prov == "anthropic" {
@@ -299,6 +321,292 @@ func (a *App) SetSecret(name, value string) error {
 		}
 		return nil
 	})
+}
+
+// SyncOTXFeed downloads a compact bulk list of SHA-256 threat indicators from
+// AlienVault OTX (/api/v1/indicators/export?types=FileHash-SHA256) and merges
+// them into the local definitions database so matching files are detected
+// offline with zero per-file API calls.
+func (a *App) SyncOTXFeed(ctx context.Context) (int, error) {
+	key := secure.Secret("otx")
+	if key == "" {
+		return 0, errors.New("no AlienVault OTX API key stored yet")
+	}
+	otxListPath := config.Path("defs", "otx-subscribed.hsb")
+	existing := map[string]string{}
+	if prev, err := os.ReadFile(otxListPath); err == nil {
+		for _, line := range strings.Split(string(prev), "\n") {
+			line = strings.TrimSpace(line)
+			if parts := strings.SplitN(line, ":", 3); len(parts) == 3 && len(parts[0]) == 64 {
+				existing[strings.ToLower(parts[0])] = parts[2]
+			}
+		}
+	}
+	var since time.Time
+	if len(existing) > 0 {
+		if raw := strings.TrimSpace(a.Config().Reputation.OTXLastSync); raw != "" {
+			if t, err := time.Parse(time.RFC3339, raw); err == nil {
+				since = t
+			}
+		}
+	}
+	otx := reputation.NewOTX(key)
+	items, err := otx.ExportSHA256(ctx, since, 5)
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if len(items) == 0 {
+		_ = a.update(func(c *config.Config) error {
+			c.Reputation.OTXLastSync = now
+			return nil
+		})
+		return 0, nil
+	}
+	for _, it := range items {
+		existing[it.SHA256] = it.Label
+	}
+	var b strings.Builder
+	for h, lbl := range existing {
+		b.WriteString(h)
+		b.WriteString(":0:")
+		b.WriteString(lbl)
+		b.WriteByte('\n')
+	}
+	if err := config.WriteAtomic(otxListPath, []byte(b.String()), 0o644); err != nil {
+		return 0, err
+	}
+	src, err := defs.Import(otxListPath, "otx-subscribed", "hashes", "otx.alienvault.com/api/v1/indicators/export", "otx")
+	if err != nil {
+		return 0, err
+	}
+	a.Log("definitions", "info", fmt.Sprintf("Synced %d new (%d total) SHA-256 indicators from AlienVault OTX bulk feed", len(items), src.Count), nil)
+	if err := a.update(func(c *config.Config) error {
+		c.Reputation.OTXLastSync = now
+		return nil
+	}); err != nil {
+		return len(items), err
+	}
+	return len(items), nil
+}
+
+// HashScanItem is one file result from a hash-only Download or Batch Folder scan.
+type HashScanItem struct {
+	Path      string `json:"path"`
+	SHA256    string `json:"sha256"`
+	Size      int64  `json:"size"`
+	Verdict   string `json:"verdict"` // malicious | suspicious | clean | unknown | skipped
+	Malicious int    `json:"malicious"`
+	Total     int    `json:"total"`
+	Label     string `json:"label,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+	Cached    bool   `json:"cached,omitempty"`
+}
+
+// HashScanReport summarizes a Download or Batch Folder hash-only Threat Exchange scan.
+type HashScanReport struct {
+	Target      string         `json:"target"`
+	Provider    string         `json:"provider"`
+	Files       int            `json:"files"`
+	UniqueHash  int            `json:"unique_hashes"`
+	CacheHits   int            `json:"cache_hits"`
+	LiveQueries int            `json:"live_queries"`
+	Malicious   int            `json:"malicious"`
+	Suspicious  int            `json:"suspicious"`
+	Clean       int            `json:"clean"`
+	Unknown     int            `json:"unknown"`
+	Truncated   bool           `json:"truncated,omitempty"`
+	RateLimited bool           `json:"rate_limited,omitempty"`
+	Items       []HashScanItem `json:"items"`
+}
+
+func sha256File(path string) (string, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, 256<<20))
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+// DefaultDownloadsDir returns the current user's Downloads folder.
+func DefaultDownloadsDir() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, "Downloads")
+	}
+	return ""
+}
+
+// BatchHashScan hashes one file or recursively walks a folder (defaulting to
+// Downloads when target is empty), checks the persistent disk cache first so
+// previously checked files cost zero API calls, and queries the active Threat
+// Exchange provider (VirusTotal, AlienVault OTX, or Both) using SHA-256 only.
+// Files are never uploaded.
+func (a *App) BatchHashScan(ctx context.Context, target string, maxFiles int) (*HashScanReport, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		target = DefaultDownloadsDir()
+	}
+	if target == "" {
+		return nil, errors.New("enter a file or folder path to hash-scan")
+	}
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		return nil, err
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		return nil, err
+	}
+	if maxFiles <= 0 {
+		maxFiles = 50
+	}
+	if maxFiles > 500 {
+		maxFiles = 500
+	}
+
+	repCache := reputation.OpenCache(config.Path("reputation_cache.json"))
+	provName := a.ActiveReputationProvider()
+	var repList []reputation.Provider
+	if provName == "otx" || provName == "both" {
+		if key := secure.Secret("otx"); key != "" {
+			repList = append(repList, reputation.NewOTXWithCache(key, repCache))
+		}
+	}
+	if provName == "virustotal" || provName == "both" {
+		if key := secure.Secret("virustotal"); key != "" {
+			repList = append(repList, reputation.NewVirusTotalWithCache(key, repCache))
+		}
+	}
+	if len(repList) == 0 {
+		return nil, errors.New("no Threat Exchange API key configured yet (add a VirusTotal or AlienVault OTX key first)")
+	}
+	var provider reputation.Provider
+	if len(repList) == 1 {
+		provider = repList[0]
+	} else {
+		provider = reputation.NewMulti(repList...)
+	}
+
+	type fileRef struct {
+		path   string
+		sha256 string
+		size   int64
+	}
+	var files []fileRef
+	truncated := false
+	addFile := func(p string) {
+		if len(files) >= maxFiles {
+			truncated = true
+			return
+		}
+		h, sz, err := sha256File(p)
+		if err != nil || sz == 0 {
+			return
+		}
+		files = append(files, fileRef{path: p, sha256: h, size: sz})
+	}
+
+	if !st.IsDir() {
+		addFile(abs)
+	} else {
+		_ = filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			if len(files) >= maxFiles {
+				truncated = true
+				return filepath.SkipAll
+			}
+			addFile(p)
+			return nil
+		})
+	}
+
+	rep := &HashScanReport{
+		Target:    abs,
+		Provider:  provider.ProviderName(),
+		Files:     len(files),
+		Truncated: truncated,
+	}
+	if len(files) == 0 {
+		return rep, nil
+	}
+
+	// Deduplicate SHA-256 hashes and detect cache hits before making live calls.
+	unique := make([]string, 0, len(files))
+	seen := map[string]bool{}
+	wasCached := map[string]bool{}
+	for _, f := range files {
+		if seen[f.sha256] {
+			continue
+		}
+		seen[f.sha256] = true
+		unique = append(unique, f.sha256)
+		if _, ok := repCache.Get("otx", f.sha256); ok && (provName == "otx" || provName == "both") {
+			wasCached[f.sha256] = true
+		} else if _, ok := repCache.Get("virustotal", f.sha256); ok && (provName == "virustotal" || provName == "both") {
+			wasCached[f.sha256] = true
+		}
+	}
+	rep.UniqueHash = len(unique)
+	results := provider.LookupBatch(ctx, unique)
+
+	for h, r := range results {
+		if wasCached[h] {
+			rep.CacheHits++
+		} else {
+			rep.LiveQueries++
+		}
+		if r.Err != nil && strings.Contains(r.Err.Error(), "rate limit") {
+			rep.RateLimited = true
+		}
+	}
+
+	for _, f := range files {
+		r, ok := results[f.sha256]
+		item := HashScanItem{
+			Path:   f.path,
+			SHA256: f.sha256,
+			Size:   f.size,
+			Cached: wasCached[f.sha256],
+		}
+		switch {
+		case !ok || r.Err != nil:
+			item.Verdict = "skipped"
+			if r.Err != nil {
+				item.Detail = r.Err.Error()
+			} else {
+				item.Detail = "skipped (rate limit or cancelled)"
+			}
+		case !r.Found:
+			item.Verdict = "unknown"
+			item.Detail = "hash not seen on " + provider.ProviderName()
+			rep.Unknown++
+		case r.Malicious >= 5:
+			item.Verdict = "malicious"
+			item.Malicious, item.Total, item.Label, item.Detail = r.Malicious, r.Total, r.Label, r.Detail
+			rep.Malicious++
+		case r.Malicious > 0:
+			item.Verdict = "suspicious"
+			item.Malicious, item.Total, item.Label, item.Detail = r.Malicious, r.Total, r.Label, r.Detail
+			rep.Suspicious++
+		default:
+			item.Verdict = "clean"
+			item.Total, item.Detail = r.Total, r.Detail
+			rep.Clean++
+		}
+		rep.Items = append(rep.Items, item)
+	}
+	a.Log("scan", map[bool]string{true: "high", false: "info"}[rep.Malicious > 0],
+		fmt.Sprintf("batch hash scan (%s): %d files (%d unique, %d cached, %d live), %d malicious, %d suspicious",
+			rep.Provider, rep.Files, rep.UniqueHash, rep.CacheHits, rep.LiveQueries, rep.Malicious, rep.Suspicious), nil)
+	return rep, nil
 }
 
 // QuarantinePath moves a suspicious or malicious file into the encoded vault.

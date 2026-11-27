@@ -210,6 +210,11 @@ type Reputation interface {
 	Lookup(ctx context.Context, sha256 string) (malicious, total int, label string, found bool, err error)
 }
 
+// DetailedReputation is an optional extension returning provider-specific summary text.
+type DetailedReputation interface {
+	LookupDetail(ctx context.Context, sha256 string) (malicious, total int, label, detail string, found bool, err error)
+}
+
 type Engine struct {
 	Cfg      *config.Config
 	DB       *defs.DB
@@ -543,20 +548,39 @@ func (e *Engine) escalate(ctx context.Context, path string, data []byte, res *Re
 		}
 	}
 
-	if e.Rep != nil && e.Cfg.Reputation.VirusTotal && !gaming {
-		if mal, total, label, found, err := e.Rep.Lookup(ctx, res.SHA256); err == nil && found {
+	if e.Rep != nil && e.Cfg.Reputation.Enabled() && !gaming {
+		var (
+			mal, total    int
+			label, detail string
+			found         bool
+			err           error
+		)
+		if dr, ok := e.Rep.(DetailedReputation); ok {
+			mal, total, label, detail, found, err = dr.LookupDetail(ctx, res.SHA256)
+		} else {
+			mal, total, label, found, err = e.Rep.Lookup(ctx, res.SHA256)
+		}
+		if err == nil && found {
 			switch {
 			case mal >= 5:
 				if label == "" {
 					label = "Reputation.Malicious"
 				}
-				res.add(Finding{"reputation", label, 90, fmt.Sprintf("%d of %d engines on VirusTotal flag this hash", mal, total)})
+				if detail == "" {
+					detail = fmt.Sprintf("%d of %d engines on Threat Exchange flag this hash", mal, total)
+				}
+				res.add(Finding{"reputation", label, 90, detail})
 			case mal > 0:
-				res.add(Finding{"heuristic", "reputation:low-detections", 20,
-					fmt.Sprintf("%d of %d engines on VirusTotal flag this hash", mal, total)})
+				if detail == "" {
+					detail = fmt.Sprintf("%d of %d engines on Threat Exchange flag this hash", mal, total)
+				}
+				res.add(Finding{"heuristic", "reputation:low-detections", 20, detail})
 			case total >= 40:
 				res.heurFactor = 0.5
-				res.add(Finding{"reputation", "known-clean", 0, fmt.Sprintf("0 of %d engines on VirusTotal flag this hash", total)})
+				if detail == "" {
+					detail = fmt.Sprintf("0 of %d engines on Threat Exchange flag this hash", total)
+				}
+				res.add(Finding{"reputation", "known-clean", 0, detail})
 			}
 			res.compute()
 			if res.Verdict != Suspicious {

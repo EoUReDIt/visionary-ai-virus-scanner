@@ -25,6 +25,7 @@ import (
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/plat"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/risk"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/secure"
 )
 
@@ -52,7 +53,9 @@ const usage = `Visionary — antivirus with local and cloud AI
   visionary ai local list|pull <model>|use <model>|gguf <file>|load|unload
   visionary ai cloud provider gemini|claude|openai|set-key|clear-key|model <id>|endpoint <url>
   visionary ai explain <file>
-  visionary reputation set-key|clear-key   VirusTotal hash lookups
+  visionary reputation provider [virustotal|otx|both]
+  visionary reputation set-key|clear-key [virustotal|otx] | sync-otx
+  visionary risk sync|guidance|search <query>|provider [nvd|custom]|set-key|clear-key
 
   visionary quarantine list|restore <id> [--allow] [--to path]|delete <id>
   visionary allow list|add <path-or-sha256>|remove <item>
@@ -223,19 +226,77 @@ func main() {
 	case "ai":
 		cmdAI(a, fs, rest)
 	case "reputation":
+		maxFiles := fs.Int("limit", 50, "maximum files to hash-check (for scan)")
 		pos := parse(fs, rest)
+		target := strings.ToLower(strings.TrimSpace(arg(pos, 1)))
 		switch arg(pos, 0) {
+		case "provider":
+			if target == "" {
+				fmt.Println(a.ActiveReputationProvider())
+				return
+			}
+			check(a.Set("reputation.provider", target))
+			ok("threat exchange provider: %s", a.ActiveReputationProvider())
 		case "set-key":
-			key, err := secure.PromptPassword("VirusTotal API key: ")
+			if target == "" {
+				if a.ActiveReputationProvider() == "otx" {
+					target = "otx"
+				} else {
+					target = "virustotal"
+				}
+			}
+			if target != "virustotal" && target != "otx" {
+				fail(errors.New("provider for set-key must be virustotal or otx"))
+			}
+			label := "VirusTotal"
+			if target == "otx" {
+				label = "AlienVault OTX"
+			}
+			key, err := secure.PromptPassword(label + " API key: ")
 			check(err)
-			check(a.SetSecret("virustotal", key))
-			ok("VirusTotal key stored (encrypted); hash lookups enabled")
+			check(a.SetSecret(target, key))
+			ok("%s key stored (encrypted); Threat Exchange hash lookups enabled", label)
 		case "clear-key":
-			check(a.SetSecret("virustotal", ""))
-			ok("VirusTotal key removed")
+			if target == "" {
+				if a.ActiveReputationProvider() == "otx" {
+					target = "otx"
+				} else {
+					target = "virustotal"
+				}
+			}
+			if target != "virustotal" && target != "otx" {
+				fail(errors.New("provider for clear-key must be virustotal or otx"))
+			}
+			check(a.SetSecret(target, ""))
+			ok("%s key removed", target)
+		case "sync-otx":
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			n, err := a.SyncOTXFeed(ctx)
+			check(err)
+			ok("synced %d new SHA-256 indicators from AlienVault OTX into local definitions", n)
+		case "scan":
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			rep, err := a.BatchHashScan(ctx, arg(pos, 1), *maxFiles)
+			check(err)
+			if jsonOut {
+				emit(rep)
+				return
+			}
+			ok("hash scan (%s): %d files (%d unique · %d cached · %d live) — %d malicious, %d suspicious, %d clean, %d unknown",
+				rep.Provider, rep.Files, rep.UniqueHash, rep.CacheHits, rep.LiveQueries,
+				rep.Malicious, rep.Suspicious, rep.Clean, rep.Unknown)
+			for _, it := range rep.Items {
+				if it.Verdict == "malicious" || it.Verdict == "suspicious" {
+					fmt.Printf("  [%s] %s — %s (%s)\n", strings.ToUpper(it.Verdict), it.Path, it.Label, it.Detail)
+				}
+			}
 		default:
-			fail(errors.New("usage: visionary reputation set-key|clear-key"))
+			fail(errors.New("usage: visionary reputation provider [virustotal|otx|both] | set-key [virustotal|otx] | clear-key [virustotal|otx] | sync-otx | scan [path]"))
 		}
+	case "risk":
+		cmdRisk(a, fs, rest)
 	case "quarantine":
 		cmdQuarantine(a, fs, rest)
 	case "allow", "exclude":
@@ -324,7 +385,25 @@ func cmdStatus(a *app.App) {
 		aiLine += "  · cloud: " + s.CloudModel
 	}
 	row("AI", aiLine)
-	row("Reputation", map[bool]string{true: "VirusTotal hash lookups", false: dim("off")}[s.VTKey])
+	var repParts []string
+	if s.VTKey && (s.RepProvider == "virustotal" || s.RepProvider == "both") {
+		repParts = append(repParts, "VirusTotal")
+	}
+	if s.OTXKey && (s.RepProvider == "otx" || s.RepProvider == "both") {
+		repParts = append(repParts, "AlienVault OTX")
+	}
+	repLine := dim("off")
+	if len(repParts) > 0 {
+		repLine = strings.Join(repParts, " + ") + " hash lookups"
+	}
+	row("Threat Exchange", repLine)
+	riskLine := s.RiskPosture
+	if s.RiskKEVs > 0 {
+		riskLine = yellow(fmt.Sprintf("%s · %d KEV advisories · %d priority targets", s.RiskPosture, s.RiskKEVs, s.RiskTargets))
+	} else if s.RiskTargets > 0 {
+		riskLine = fmt.Sprintf("%s · %d priority targets", s.RiskPosture, s.RiskTargets)
+	}
+	row("Risk Exchange", riskLine)
 	beh := fmt.Sprintf("%d programs known", s.Behavior.Executables)
 	if s.Learning {
 		beh += yellow("  · learning")
@@ -996,7 +1075,9 @@ func cmdSettings(a *app.App, fs *flag.FlagSet, rest []string) {
 		if !jsonOut {
 			keys := []string{"realtime.auto_quarantine", "scan.max_file_size_mb", "scan.workers", "scan.scan_archives",
 				"scan.use_cache", "scan.ai_budget", "behavior.enabled", "behavior.threshold",
-				"security.require_password_to_disable", "windows.defender_second_opinion", "reputation.virustotal",
+				"security.require_password_to_disable", "windows.defender_second_opinion",
+				"reputation.provider", "reputation.virustotal", "reputation.otx",
+				"risk.enabled", "risk.provider", "risk.endpoint", "risk.kev_only", "risk.min_severity", "risk.auto_prioritize",
 				"ai.sensitivity", "ai.confidence_threshold", "ai.cloud.provider", "ai.cloud.endpoint",
 				"ai.cloud.share_snippets", "ai.cloud.model", "ai.cloud.effort", "ai.local.endpoint", "ai.local.provider",
 				"ai.local.server_path", "ai.local.max_params_b", "ai.local.cpu_only", "ai.local.threads",
@@ -1092,5 +1173,78 @@ func hfCommand(ctx context.Context, a *app.App, pos []string, fs *flag.FlagSet, 
 		ok("token saved (used only for gated models)")
 	default:
 		fail(errors.New("usage: visionary ai local hf search <text>|files <repo>|get <repo[:quant]> [--quant Q] [--no-use]|set-token"))
+	}
+}
+
+func cmdRisk(a *app.App, fs *flag.FlagSet, rest []string) {
+	kev := fs.Bool("kev", false, "only CISA Known Exploited Vulnerabilities")
+	sev := fs.String("severity", "", "CVSS v3 severity: CRITICAL, HIGH, MEDIUM, or LOW")
+	limit := fs.Int("limit", 15, "maximum CVEs to return")
+	pos := parse(fs, rest)
+	switch arg(pos, 0) {
+	case "", "status", "guidance":
+		g := a.RiskGuidance()
+		if jsonOut {
+			emit(g)
+			return
+		}
+		row("Provider", a.ActiveRiskProvider())
+		row("Scan posture", g.Posture)
+		row("Guidance", g.Reason)
+		for _, t := range g.PriorityTargets {
+			fmt.Printf("  %-34s  %-8s  %s\n", t.Product, t.Severity, strings.Join(t.CVEs, ", "))
+		}
+	case "sync":
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		st, g, err := a.SyncRiskExchange(ctx)
+		check(err)
+		if jsonOut {
+			emit(map[string]any{"state": st, "guidance": g})
+			return
+		}
+		ok("synced %d advisories (%d KEV) from %s — scan posture: %s", len(st.Advisories), g.KEVCount, st.Provider, g.Posture)
+		fmt.Println("  " + dim(g.Reason))
+	case "search":
+		q := strings.Join(pos[1:], " ")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		advs, total, err := a.SearchRiskExchange(ctx, risk.SearchOptions{
+			Query:    q,
+			Severity: *sev,
+			KEVOnly:  *kev,
+			Limit:    *limit,
+		})
+		check(err)
+		if jsonOut {
+			emit(map[string]any{"total": total, "advisories": advs})
+			return
+		}
+		ok("%d matching CVEs (showing %d)", total, len(advs))
+		for _, c := range advs {
+			tag := c.Severity
+			if c.KEV {
+				tag += " · KEV"
+			}
+			fmt.Printf("  %-16s  CVSS %-4.1f  %-16s  %s\n", c.ID, c.CVSS, tag, c.Summary)
+		}
+	case "provider":
+		p := arg(pos, 1)
+		if p == "" {
+			fmt.Println(a.ActiveRiskProvider())
+			return
+		}
+		check(a.Set("risk.provider", p))
+		ok("risk exchange provider: %s", a.ActiveRiskProvider())
+	case "set-key":
+		key, err := secure.PromptPassword("NIST NVD API key (optional — lifts free limit from 5 to 50 req/30s): ")
+		check(err)
+		check(a.SetSecret("nvd", key))
+		ok("NIST NVD API key stored (encrypted)")
+	case "clear-key":
+		check(a.SetSecret("nvd", ""))
+		ok("NIST NVD API key removed (using keyless free tier: 5 req/30s)")
+	default:
+		fail(errors.New("usage: visionary risk status|sync|guidance|search <query> [--kev] [--severity CRITICAL|HIGH]|provider [nvd|custom]|set-key|clear-key"))
 	}
 }

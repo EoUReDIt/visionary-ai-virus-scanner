@@ -1,5 +1,3 @@
-// Package reputation looks file hashes up in VirusTotal. Only the SHA-256
-// leaves the machine: files are never uploaded.
 package reputation
 
 import (
@@ -7,48 +5,61 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
-	"sync"
+	"strings"
 	"time"
 )
 
 type VirusTotal struct {
-	Key     string
-	BaseURL string
-	mu      sync.Mutex
-	cache   map[string]vtResult
-}
-
-type vtResult struct {
-	mal, total int
-	label      string
-	found      bool
+	Key       string
+	BaseURL   string
+	PaceDelay time.Duration // delay between live uncached batch requests (e.g. 15s for 4 req/min free tier)
+	cache     *DiskCache
 }
 
 func NewVirusTotal(key string) *VirusTotal {
-	return &VirusTotal{Key: key, BaseURL: "https://www.virustotal.com/api/v3", cache: map[string]vtResult{}}
+	return NewVirusTotalWithCache(key, nil)
 }
 
-var client = &http.Client{Timeout: 30 * time.Second}
+func NewVirusTotalWithCache(key string, cache *DiskCache) *VirusTotal {
+	if cache == nil {
+		cache = OpenCache("")
+	}
+	return &VirusTotal{
+		Key:       strings.TrimSpace(key),
+		BaseURL:   "https://www.virustotal.com/api/v3",
+		PaceDelay: 15 * time.Second,
+		cache:     cache,
+	}
+}
+
+func (v *VirusTotal) ProviderName() string { return "VirusTotal" }
 
 func (v *VirusTotal) Lookup(ctx context.Context, sha256 string) (malicious, total int, label string, found bool, err error) {
-	v.mu.Lock()
-	c, ok := v.cache[sha256]
-	v.mu.Unlock()
-	if ok {
-		return c.mal, c.total, c.label, c.found, nil
+	mal, tot, lbl, _, ok, e := v.LookupDetail(ctx, sha256)
+	return mal, tot, lbl, ok, e
+}
+
+func (v *VirusTotal) LookupDetail(ctx context.Context, sha256 string) (malicious, total int, label, detail string, found bool, err error) {
+	h := normalizeHash(sha256)
+	if !validSHA256(h) {
+		return 0, 0, "", "", false, errors.New("virustotal: invalid SHA-256 hash")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.BaseURL+"/files/"+sha256, nil)
+	if rec, ok := v.cache.Get("virustotal", h); ok {
+		return rec.Mal, rec.Total, rec.Label, rec.Detail, rec.Found, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(v.BaseURL, "/")+"/files/"+h, nil)
 	if err != nil {
-		return 0, 0, "", false, err
+		return 0, 0, "", "", false, err
 	}
 	req.Header.Set("x-apikey", v.Key)
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, 0, "", false, err
+		return 0, 0, "", "", false, err
 	}
 	defer resp.Body.Close()
-	var r vtResult
+	var r cacheRecord
 	switch resp.StatusCode {
 	case http.StatusOK:
 		var body struct {
@@ -61,27 +72,65 @@ func (v *VirusTotal) Lookup(ctx context.Context, sha256 string) (malicious, tota
 				} `json:"attributes"`
 			} `json:"data"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return 0, 0, "", false, err
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&body); err != nil {
+			return 0, 0, "", "", false, err
 		}
 		a := body.Data.Attributes
-		r = vtResult{mal: a.Stats["malicious"], label: a.Class.Label, found: true}
+		r = cacheRecord{Mal: a.Stats["malicious"], Label: a.Class.Label, Found: true}
 		for k, n := range a.Stats {
 			if k != "type-unsupported" && k != "timeout" && k != "failure" {
-				r.total += n
+				r.Total += n
 			}
 		}
+		r.Detail = fmt.Sprintf("%d of %d engines on VirusTotal flag this hash", r.Mal, r.Total)
 	case http.StatusNotFound:
 		// Unknown to VirusTotal: not evidence either way.
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return 0, 0, "", false, errors.New("virustotal: the API key was rejected")
+		return 0, 0, "", "", false, errors.New("virustotal: the API key was rejected")
 	case http.StatusTooManyRequests:
-		return 0, 0, "", false, errors.New("virustotal: rate limit reached")
+		return 0, 0, "", "", false, errors.New("virustotal: rate limit reached")
 	default:
-		return 0, 0, "", false, fmt.Errorf("virustotal: %s", resp.Status)
+		return 0, 0, "", "", false, fmt.Errorf("virustotal: %s", resp.Status)
 	}
-	v.mu.Lock()
-	v.cache[sha256] = r
-	v.mu.Unlock()
-	return r.mal, r.total, r.label, r.found, nil
+	v.cache.Put("virustotal", h, r)
+	return r.Mal, r.Total, r.Label, r.Detail, r.Found, nil
+}
+
+// LookupBatch deduplicates hashes, serves cached entries with zero requests,
+// paces live requests to respect the free 4 req/min limit, and stops cleanly
+// if VirusTotal returns HTTP 429 rate-limit.
+func (v *VirusTotal) LookupBatch(ctx context.Context, hashes []string) map[string]LookupResult {
+	out := make(map[string]LookupResult, len(hashes))
+	var uncached []string
+	seen := map[string]bool{}
+	for _, raw := range hashes {
+		h := normalizeHash(raw)
+		if !validSHA256(h) || seen[h] {
+			continue
+		}
+		seen[h] = true
+		if rec, ok := v.cache.Get("virustotal", h); ok {
+			out[h] = LookupResult{Malicious: rec.Mal, Total: rec.Total, Label: rec.Label, Detail: rec.Detail, Found: rec.Found}
+			continue
+		}
+		uncached = append(uncached, h)
+	}
+	for i, h := range uncached {
+		if i > 0 && v.PaceDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return out
+			case <-time.After(v.PaceDelay):
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			break
+		}
+		mal, tot, lbl, det, ok, err := v.LookupDetail(ctx, h)
+		out[h] = LookupResult{Malicious: mal, Total: tot, Label: lbl, Detail: det, Found: ok, Err: err}
+		if err != nil && strings.Contains(err.Error(), "rate limit") {
+			break
+		}
+	}
+	return out
 }

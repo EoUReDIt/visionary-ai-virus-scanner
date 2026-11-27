@@ -100,6 +100,8 @@ func saveSecrets(m map[string]string) error {
 var envNames = map[string]string{
 	"anthropic":   "ANTHROPIC_API_KEY",
 	"virustotal":  "VISIONARY_VT_KEY",
+	"otx":         "OTX_API_KEY",
+	"nvd":         "NVD_API_KEY",
 	"huggingface": "HF_TOKEN",
 }
 

@@ -568,15 +568,105 @@ section.on{display:block}
           <span class="cli">visionary ai local hf search &lt;text&gt; &nbsp;·&nbsp; visionary ai local hf get &lt;repo&gt; &nbsp;·&nbsp; visionary ai local models</span>
         </div>
 
-        <h2>Hash Reputation (VirusTotal)</h2>
+        <h2>Threat Exchange (Hash Reputation)</h2>
         <div class="card">
-          <div id="aVT"></div>
-          <div class="row">
-            <input type="password" id="kVT" placeholder="VirusTotal API key" autocomplete="off" aria-label="VirusTotal API key">
-            <button class="b" id="bVT">Save key</button>
+          <div id="aRep"></div>
+          <div class="row" style="margin-top:12px">
+            <label class="fld">Threat Exchange provider
+              <select id="rProv" aria-label="Threat Exchange provider"></select>
+            </label>
+            <label class="fld" id="rKeyTargetWrap" hidden>Key for
+              <select id="rKeyTarget" aria-label="API key target provider">
+                <option value="otx">AlienVault OTX</option>
+                <option value="virustotal">VirusTotal</option>
+              </select>
+            </label>
+            <div style="margin-left:auto;align-self:flex-end" id="rOtxSyncWrap" hidden>
+              <button class="b" id="bOtxSync">Sync OTX hash feed</button>
+            </div>
           </div>
-          <div class="muted">Only SHA-256 digests are queried. Files are never uploaded.</div>
-          <span class="cli">visionary reputation set-key</span>
+          <div class="row">
+            <input type="password" id="kRep" placeholder="Paste Threat Exchange API key (encrypted at rest)" autocomplete="off" aria-label="Threat Exchange API key">
+            <button class="b p" id="bRepKey">Save key</button>
+            <button class="b d" id="bRepClr">Remove key</button>
+          </div>
+          <div class="muted" id="rQuotaNote">Only SHA-256 digests are queried and results are cached on disk to save API quota. Files are never uploaded.</div>
+          <div class="row" style="margin-top:12px">
+            <input type="text" id="bHashPath" placeholder="Optional folder or file path (blank = Downloads folder)" aria-label="Folder or file path for batch hash scan">
+            <button class="b" id="bHashDownloads">Scan Downloads (hash-only)</button>
+            <button class="b" id="bHashBatch">Batch hash scan</button>
+          </div>
+          <div id="bHashOut"></div>
+          <span class="cli" id="rCli">visionary reputation provider otx &nbsp;·&nbsp; visionary reputation set-key otx &nbsp;·&nbsp; visionary reputation scan</span>
+        </div>
+      </section>
+
+      <!-- RISK EXCHANGE -->
+      <section id="risk">
+        <h1>Risk Exchange</h1>
+        <p class="lead">Connect HTTP/API vulnerability feeds — starting with NIST's free NVD CVE 2.0 API (250,000+ CVEs, no key required) — to guide where Visionary looks and how aggressively it scans.</p>
+
+        <h2>Active Scan Guidance (Where &amp; How to Scan)</h2>
+        <div class="grid" id="rkCards"></div>
+        <div class="card" style="margin-top:12px">
+          <div id="rkGuidance"></div>
+          <div class="tablewrap" id="rkTargets" style="margin:10px 0"></div>
+          <div class="row">
+            <button class="b p" id="bRkScan">Run Risk-Guided Scan</button>
+            <button class="b" id="bRkSync">Sync advisories now</button>
+          </div>
+        </div>
+
+        <h2>HTTP / API Vulnerability Provider</h2>
+        <div class="card">
+          <div id="rkProvInfo"></div>
+          <div class="row" style="margin-top:12px">
+            <label class="fld">Provider
+              <select id="rkProv" aria-label="Risk Exchange HTTP/API provider"></select>
+            </label>
+            <label class="fld">Minimum severity
+              <select id="rkSev" aria-label="Minimum CVE severity">
+                <option value="CRITICAL">CRITICAL (9.0+)</option>
+                <option value="HIGH">HIGH (7.0+)</option>
+                <option value="MEDIUM">MEDIUM (4.0+)</option>
+                <option value="LOW">LOW (all)</option>
+              </select>
+            </label>
+          </div>
+          <div class="row" id="rkEndpointRow" hidden>
+            <input type="text" id="rkEndpoint" placeholder="https://services.nvd.nist.gov/rest/json/cves/2.0 (or custom JSON feed URL)" aria-label="Custom Risk Exchange HTTP endpoint">
+            <button class="b" id="bRkEndpoint">Save endpoint</button>
+          </div>
+          <div class="row">
+            <label class="chk"><input type="checkbox" id="rkKev"> Focus on CISA Known Exploited Vulnerabilities (KEV) actively exploited in the wild</label>
+          </div>
+          <div class="row">
+            <label class="chk"><input type="checkbox" id="rkAuto"> Auto-prioritize Quick Scans using active Risk Exchange targets &amp; deep escalation</label>
+          </div>
+          <div class="row">
+            <input type="password" id="kNvd" placeholder="Optional free NIST NVD API key (lifts 5 req/30s -> 50 req/30s)" autocomplete="off" aria-label="Optional NIST NVD API key">
+            <button class="b" id="bNvdKey">Save optional key</button>
+            <button class="b d" id="bNvdClr">Clear key</button>
+          </div>
+          <span class="cli">visionary risk sync &nbsp;·&nbsp; visionary risk guidance &nbsp;·&nbsp; visionary risk search chrome --kev</span>
+        </div>
+
+        <h2>Search 250,000+ CVEs (Free NVD 2.0 API)</h2>
+        <div class="card">
+          <div class="row">
+            <input type="text" id="rkQ" placeholder="Software keyword or CVE ID (e.g. chrome, 7-zip, powershell, CVE-2021-44228)" aria-label="Search CVEs">
+            <select id="rkSearchSev" aria-label="Search severity filter">
+              <option value="">Any severity</option>
+              <option value="CRITICAL">CRITICAL</option>
+              <option value="HIGH">HIGH</option>
+              <option value="MEDIUM">MEDIUM</option>
+              <option value="LOW">LOW</option>
+            </select>
+            <label class="chk"><input type="checkbox" id="rkSearchKev"> KEV only</label>
+            <button class="b p" id="bRkSearch">Search CVEs</button>
+          </div>
+          <div class="meta-line" id="rkMeta" style="margin:8px 0"></div>
+          <div class="tablewrap" id="rkTable"></div>
         </div>
       </section>
 
@@ -807,6 +897,7 @@ const tabs = [
   ["scan", "Scan", ["M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z", "M20 20l-4.2-4.2"]],
   ["threats", "Threats", ["M12 9v4", "M12 17h.01", "M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"]],
   ["ai", "AI Engine", ["M12 3v3", "M12 18v3", "M4.9 4.9l2.1 2.1", "M17 17l2.1 2.1", "M3 12h3", "M18 12h3", "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"]],
+  ["risk", "Risk Exchange", ["M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z", "M2 12h20", "M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"]],
   ["definitions", "Definitions", ["M4 6h16", "M4 12h16", "M4 18h10"]],
   ["behaviour", "Behaviour", "M3 12h4l3-7 4 14 3-7h4"],
   ["settings", "Settings", ["M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"]],
@@ -989,6 +1080,7 @@ async function refresh() {
   if (current === "threats") threats();
   if (current === "definitions") defsTab();
   if (current === "ai") aiTab();
+  if (current === "risk") riskTab();
   if (current === "behaviour") behaviour(s);
   if (current === "settings") settingsTab();
   if (current === "activity") activity();
@@ -1026,7 +1118,7 @@ function overview(s) {
     ["01", "Hash & YARA", d.hashes.toLocaleString() + " hashes · " + d.rules + " rules", "Active", "t-ok", "definitions"],
     ["02", "Static & Certs", "PE entropy, imports, WinVerifyTrust", "Active", "t-ok", "scan"],
     ["03", "Behaviour & LOLBin", s.behavior_learning ? "Learning baseline" : (s.behavior.parent_child_edges + " launch pairs"), s.behavior_learning ? "Learning" : "Active", s.behavior_learning ? "t-info" : "t-ok", "behaviour"],
-    ["04", "Defender & VT", (s.windows_security && s.windows_security.available ? "Defender AMSI" : "Local rules") + (s.virustotal_key_set ? " + VT" : ""), s.virustotal_key_set || (s.windows_security && s.windows_security.available) ? "Ready" : "Standby", "t-info", "ai"],
+    ["04", "Defender & Exchange", (s.windows_security && s.windows_security.available ? "Defender AMSI" : "Local rules") + (s.virustotal_key_set && s.otx_key_set ? " + VT & OTX" : (s.otx_key_set ? " + OTX" : (s.virustotal_key_set ? " + VT" : ""))), s.virustotal_key_set || s.otx_key_set || (s.windows_security && s.windows_security.available) ? "Ready" : "Standby", "t-info", "ai"],
     ["05", "Local AI (<3B)", s.local_model || "No local model active", localOn ? "Active" : "Standby", localOn ? "t-ok" : "t-muted", "ai"],
     ["06", "Cloud AI", s.cloud_provider ? (s.cloud_provider + (s.cloud_model ? " · " + s.cloud_model : "")) : "Gemini / Claude / OpenAI", cloudOn ? "Active" : "Standby", cloudOn ? "t-ok" : "t-muted", "ai"]
   ];
@@ -1318,7 +1410,37 @@ async function aiTab() {
   if (!$("mRec").options.length) {
     fill($("mRec"), (a.recommended || []).map(m => el("option", { value: m.Model }, m.Model + " — " + m.Params + ", " + m.About)));
   }
-  fill($("aVT"), el("div", {}, el("b", {}, "VirusTotal"), " · ", el("span", { class: "st " + (a.vt_key_set ? "t-ok" : "t-muted") }, a.vt_key_set ? "key stored" : "not configured")));
+  /* Threat Exchange picker (VirusTotal / AlienVault OTX / Both) */
+  const repProvs = a.reputation_providers || [
+    { id: "virustotal", name: "VirusTotal", docs_hint: "Multi-engine SHA-256 hash lookups via VirusTotal API v3" },
+    { id: "otx", name: "AlienVault OTX", docs_hint: "Open Threat Exchange DirectConnect API v1 (otx.alienvault.com/api)" },
+    { id: "both", name: "VirusTotal + AlienVault OTX", docs_hint: "Checks OTX first and falls back to VirusTotal only when needed" }
+  ];
+  const repProv = a.reputation_provider || "virustotal";
+  const repKeys = a.reputation_keys || { virustotal: !!a.vt_key_set, otx: false };
+  fill($("rProv"), repProvs.map(p => el("option", { value: p.id }, p.name)));
+  $("rProv").value = repProv;
+  const activeRep = repProvs.find(p => p.id === repProv) || repProvs[0];
+  const repReady = repProv === "otx" ? !!repKeys.otx : (repProv === "both" ? (!!repKeys.otx || !!repKeys.virustotal) : !!repKeys.virustotal);
+  const repKeySummary = [
+    el("span", { style: "margin-right:12px" }, "VirusTotal: ", el("span", { class: "st " + (repKeys.virustotal ? "t-ok" : "t-muted") }, repKeys.virustotal ? "key stored" : "not set")),
+    el("span", { style: "margin-right:12px" }, "AlienVault OTX: ", el("span", { class: "st " + (repKeys.otx ? "t-ok" : "t-muted") }, repKeys.otx ? "key stored" : "not set")),
+    a.otx_last_sync ? el("span", { class: "muted" }, "OTX feed synced " + when(a.otx_last_sync)) : null
+  ].filter(Boolean);
+  fill($("aRep"),
+    el("div", {}, el("b", {}, activeRep.name), " — ",
+      el("span", { class: "st " + (repReady ? "t-ok" : "t-muted") }, repReady ? "ready" : "API key required")),
+    activeRep.docs_hint && el("div", { class: "muted", style: "margin-top:3px" }, activeRep.docs_hint),
+    el("div", { class: "meta-line", style: "margin-top:6px" }, repKeySummary));
+  $("rKeyTargetWrap").hidden = repProv !== "both";
+  if (repProv !== "both") $("rKeyTarget").value = repProv;
+  const keyTarget = repProv === "both" ? $("rKeyTarget").value : repProv;
+  $("kRep").placeholder = (keyTarget === "otx" ? "AlienVault OTX API key (X-OTX-API-KEY)" : "VirusTotal API key (x-apikey)") + " — encrypted at rest";
+  $("rOtxSyncWrap").hidden = !(repProv === "otx" || repProv === "both");
+  $("bOtxSync").disabled = !repKeys.otx;
+  $("rCli").textContent = repProv === "virustotal"
+    ? "visionary reputation provider virustotal  ·  visionary reputation set-key virustotal"
+    : "visionary reputation provider " + repProv + "  ·  visionary reputation set-key otx  ·  visionary reputation sync-otx";
 }
 
 $("aMode").onchange = e => act(() => api("/api/ai", { action: "mode", value: e.target.value }), "AI mode updated");
@@ -1370,7 +1492,130 @@ $("bImpGguf").onclick = e => act(() => api("/api/ai", { action: "import", path: 
 $("bHFTok").onclick = e => act(() => api("/api/ai", { action: "hf-token", key: $("kHF").value }), "Token saved", e.target).then(() => { $("kHF").value = ""; });
 $("bPull").onclick = e => { toast("Pulling " + $("mRec").value + "…"); act(() => api("/api/ai", { action: "pull", name: $("mRec").value }), r => "Model ready (" + r.params_b.toFixed(2) + "B parameters)", e.target); };
 $("bGguf").onclick = e => act(() => api("/api/ai", { action: "gguf", path: $("gPath").value.trim() }), r => "Using GGUF model (" + r.params_b.toFixed(2) + "B parameters)", e.target);
-$("bVT").onclick = e => act(() => api("/api/ai", { action: "vt-key", key: $("kVT").value }), "VirusTotal key saved", e.target).then(() => { $("kVT").value = ""; });
+$("rProv").onchange = e => act(() => api("/api/ai", { action: "reputation-provider", value: e.target.value }), "Threat Exchange provider updated");
+$("rKeyTarget").onchange = e => {
+  $("kRep").placeholder = (e.target.value === "otx" ? "AlienVault OTX API key (X-OTX-API-KEY)" : "VirusTotal API key (x-apikey)") + " — encrypted at rest";
+};
+$("bRepKey").onclick = e => {
+  const target = $("rProv").value === "both" ? $("rKeyTarget").value : $("rProv").value;
+  act(() => api("/api/ai", { action: "reputation-key", name: target, key: $("kRep").value }), (target === "otx" ? "AlienVault OTX" : "VirusTotal") + " key encrypted & stored", e.target).then(() => { $("kRep").value = ""; });
+};
+$("bRepClr").onclick = async e => {
+  const target = $("rProv").value === "both" ? $("rKeyTarget").value : $("rProv").value;
+  const label = target === "otx" ? "AlienVault OTX" : "VirusTotal";
+  if (await askConfirm("Remove API key", "Remove the stored " + label + " API key?", "Remove key", true)) {
+    act(() => api("/api/ai", { action: "reputation-clear-key", name: target }), label + " key removed", e.target);
+  }
+};
+$("bOtxSync").onclick = e => act(() => api("/api/ai", { action: "otx-sync" }), r => r && r.imported ? ("Synced " + r.imported.toLocaleString() + " SHA-256 hashes from OTX into local definitions") : "OTX feed is already up to date", e.target);
+
+function renderHashScan(rep) {
+  if (!rep) return;
+  const rows = (rep.items || []).map(it => el("tr", {},
+    el("td", {}, verdictLabel(it.verdict)),
+    el("td", { class: "num" }, it.total ? (it.malicious + "/" + it.total) : "—"),
+    el("td", {}, el("span", { class: "st " + (it.cached ? "t-ok" : "t-info") }, it.cached ? "cache" : "live")),
+    el("td", {}, el("div", { class: "path" }, it.path), it.label || it.detail ? el("div", { class: "muted" }, [it.label, it.detail].filter(Boolean).join(" · ")) : null)));
+  fill($("bHashOut"),
+    el("div", { class: "meta-line", style: "margin:8px 0" },
+      rep.provider + " · " + rep.files + " files (" + rep.unique_hashes + " unique · " + rep.cache_hits + " cache hits · " + rep.live_queries + " live API calls)" +
+      (rep.rate_limited ? " · paused on API rate limit" : "")),
+    el("div", { class: "tablewrap" }, table(["Verdict", "Ratio", "Source", "File"], rows, "No files found in target path.")));
+}
+async function runHashScan(pathVal, btn) {
+  fill($("bHashOut"), el("div", { class: "bar" }, el("i")));
+  const rep = await act(() => api("/api/ai", { action: "hash-scan", path: pathVal, limit: 50 }), r => "Hash scan complete: " + r.files + " files checked (" + r.cache_hits + " cached, " + r.live_queries + " live)", btn);
+  if (rep) renderHashScan(rep); else fill($("bHashOut"));
+}
+$("bHashDownloads").onclick = e => runHashScan("", e.target);
+$("bHashBatch").onclick = e => runHashScan($("bHashPath").value.trim(), e.target);
+
+/* RISK EXCHANGE */
+function renderAdvisories(list, total, label) {
+  const rows = (list || []).map(c => {
+    const sevCls = c.severity === "CRITICAL" ? "t-bad" : c.severity === "HIGH" ? "t-warn" : "t-info";
+    return el("tr", {},
+      el("td", {}, el("b", { style: "font-family:var(--mono)" }, c.id), c.kev ? [" ", el("span", { class: "st t-bad" }, "KEV")] : null),
+      el("td", { class: "num" }, el("span", { class: "st " + sevCls }, (c.cvss ? c.cvss.toFixed(1) + " " : "") + (c.severity || "UNKNOWN"))),
+      el("td", {}, (c.scan_hints && c.scan_hints.length) ? c.scan_hints.join(", ") : ((c.products || []).slice(0, 3).join(", ") || "General")),
+      el("td", {}, c.summary || c.kev_name || ""));
+  });
+  $("rkMeta").textContent = label || ((list || []).length + " advisories shown" + (total ? " of " + total.toLocaleString() + " matching CVEs" : ""));
+  fill($("rkTable"), table(["CVE ID", "CVSS / Severity", "Scan Target / Software", "Summary"], rows, "No CVE advisories loaded yet. Click Sync advisories now or search NVD above."));
+}
+
+async function riskTab() {
+  const r = await api("/api/risk");
+  const cfg = r.config || {};
+  const g = r.guidance || { posture: "standard", reason: "", priority_targets: [] };
+  const st = r.state || { advisories: [] };
+  const provs = r.providers || [];
+
+  const postCls = g.posture === "critical" ? "t-bad" : g.posture === "elevated" ? "t-warn" : "t-ok";
+  fill($("rkCards"),
+    card("Scan posture", el("span", { class: postCls }, (g.posture || "standard").toUpperCase()), g.recommend_deep ? "Deep + AI escalation recommended" : "Standard scan posture"),
+    card("CISA KEV active", String(g.kev_count || 0), (g.critical_count || 0) + " Critical · " + (g.high_count || 0) + " High"),
+    card("Priority targets", String((g.priority_targets || []).length), "Mapped to local scan folders"),
+    card("Last synced", st.synced_at ? when(st.synced_at) : "Never", r.key_set ? "NIST API key active (50 req/30s)" : "Free keyless tier (5 req/30s)"));
+
+  fill($("rkGuidance"),
+    el("div", {}, el("b", {}, "How this guides scans: "), g.reason || "Sync advisories from NIST NVD to prioritize affected software folders."));
+
+  fill($("rkTargets"), table(["Affected software", "Severity", "Matched CVEs", "Priority scan locations"], (g.priority_targets || []).map(t => el("tr", {},
+    el("td", {}, el("b", {}, t.product), t.kev ? [" · ", el("span", { class: "st t-bad" }, "KEV")] : null),
+    el("td", {}, el("span", { class: "st " + (t.severity === "CRITICAL" ? "t-bad" : t.severity === "HIGH" ? "t-warn" : "t-info") }, t.severity || "HIGH")),
+    el("td", { style: "font-family:var(--mono);font-size:12px" }, (t.cves || []).join(", ")),
+    el("td", { class: "path" }, (t.paths && t.paths.length) ? t.paths.join(" · ") : "Downloads & Temp"))),
+    "No priority software targets mapped yet — click Sync advisories now."));
+
+  fill($("rkProv"), provs.map(p => el("option", { value: p.id }, p.name)));
+  $("rkProv").value = r.provider || "nvd";
+  $("rkSev").value = cfg.min_severity || "HIGH";
+  $("rkKev").checked = cfg.kev_only !== false;
+  $("rkAuto").checked = cfg.auto_prioritize !== false;
+  $("rkEndpointRow").hidden = $("rkProv").value !== "custom";
+  $("rkEndpoint").value = cfg.endpoint || "";
+  const active = provs.find(p => p.id === (r.provider || "nvd")) || provs[0];
+  fill($("rkProvInfo"),
+    el("div", {}, el("b", {}, active ? active.name : "NIST NVD CVE 2.0"), " — ",
+      el("span", { class: "st t-ok" }, r.key_set ? "API key stored (50 req/30s)" : "free tier ready (no key required)")),
+    active && el("div", { class: "muted", style: "margin-top:3px" }, active.docs_hint),
+    active && el("div", { class: "meta-line", style: "margin-top:4px" }, active.rate_limit_hint));
+
+  renderAdvisories(st.advisories || [], st.total_match, st.synced_at
+    ? ("Synced feed (" + (st.advisories || []).length + " advisories loaded from " + (st.provider || "nvd").toUpperCase() + ", " + when(st.synced_at) + ")")
+    : "No advisories synced yet.");
+}
+
+$("rkProv").onchange = e => act(() => api("/api/risk", { action: "provider", value: e.target.value }), "Risk Exchange provider updated");
+$("rkSev").onchange = e => act(() => api("/api/settings", { action: "set", key: "risk.min_severity", value: e.target.value }), "Minimum CVE severity saved");
+$("rkKev").onchange = e => act(() => api("/api/settings", { action: "set", key: "risk.kev_only", value: String(e.target.checked) }), "KEV filter updated");
+$("rkAuto").onchange = e => act(() => api("/api/settings", { action: "set", key: "risk.auto_prioritize", value: String(e.target.checked) }), "Quick Scan auto-prioritization saved");
+$("bRkEndpoint").onclick = e => act(() => api("/api/risk", { action: "endpoint", value: $("rkEndpoint").value.trim() }), "Risk Exchange endpoint saved", e.target);
+$("bNvdKey").onclick = e => act(() => api("/api/risk", { action: "set-key", key: $("kNvd").value }), "NIST NVD API key encrypted & stored", e.target).then(() => { $("kNvd").value = ""; });
+$("bNvdClr").onclick = e => act(() => api("/api/risk", { action: "clear-key" }), "Removed NIST NVD key (using free keyless tier)", e.target);
+$("bRkSync").onclick = e => act(() => api("/api/risk", { action: "sync" }), r => "Synced " + ((r && r.state && r.state.advisories) ? r.state.advisories.length : 0) + " advisories · posture: " + (r && r.guidance ? r.guidance.posture : "updated"), e.target);
+$("bRkScan").onclick = async e => {
+  await act(() => api("/api/risk", { action: "scan-guided" }), "Risk-guided deep scan started", e.target);
+  show("scan");
+  pollJob();
+};
+$("bRkSearch").onclick = async e => {
+  const q = $("rkQ").value.trim();
+  const sev = $("rkSearchSev").value;
+  const kev = $("rkSearchKev").checked;
+  fill($("rkTable"), el("div", { class: "bar" }, el("i")));
+  try {
+    e.target.disabled = true;
+    const r = await api("/api/risk", { action: "search", value: q, kind: sev, all: kev, limit: 25 });
+    renderAdvisories(r.advisories || [], r.total, "Search results: " + (r.advisories || []).length + " of " + (r.total || 0).toLocaleString() + " matching CVEs");
+  } catch (err) {
+    toast(err.message, true);
+    fill($("rkTable"));
+  } finally {
+    e.target.disabled = false;
+  }
+};
 
 $("bTest").onclick = async e => {
   fill($("aTest"), el("div", { class: "bar" }, el("i")));

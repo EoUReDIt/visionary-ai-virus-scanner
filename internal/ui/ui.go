@@ -28,6 +28,8 @@ import (
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/defs"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/plat"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/reputation"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/risk"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/secure"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/tray"
 )
@@ -268,6 +270,7 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 		"/api/quarantine": s.quarantine,
 		"/api/defs":       s.defs,
 		"/api/ai":         s.ai,
+		"/api/risk":       s.risk,
 		"/api/settings":   s.settings,
 		"/api/windows":    s.windows,
 		"/api/preboot":    s.preboot,
@@ -387,6 +390,7 @@ type req struct {
 	All        bool     `json:"all"`
 	Days       int      `json:"days"`
 	Hours      int      `json:"hours"`
+	Limit      int      `json:"limit"`
 }
 
 func body(r *http.Request) (req, error) {
@@ -640,9 +644,16 @@ func (s *server) ai(r *http.Request) (any, error) {
 				"claude": secure.Secret("anthropic") != "",
 				"openai": secure.Secret("openai") != "",
 			},
-			"ai_stats":     s.a.Engine().AIStats(),
-			"vt_key_set":   secure.Secret("virustotal") != "",
-			"recommended":  ai.RecommendedFor(cfg.AI.Local.MaxParamsB),
+			"ai_stats":             s.a.Engine().AIStats(),
+			"vt_key_set":           secure.Secret("virustotal") != "",
+			"reputation_provider":  s.a.ActiveReputationProvider(),
+			"reputation_providers": reputation.Providers,
+			"reputation_keys": map[string]bool{
+				"virustotal": secure.Secret("virustotal") != "",
+				"otx":        secure.Secret("otx") != "",
+			},
+			"otx_last_sync": cfg.Reputation.OTXLastSync,
+			"recommended":   ai.RecommendedFor(cfg.AI.Local.MaxParamsB),
 			"models":       models,
 			"ollama":       runtime,
 			"stored":       stored,
@@ -719,6 +730,22 @@ func (s *server) ai(r *http.Request) (any, error) {
 		return nil, s.a.SetSecret(ai.CloudSecretName(prov), "")
 	case "vt-key":
 		return nil, s.a.SetSecret("virustotal", q.Key)
+	case "reputation-provider":
+		return nil, s.a.Set("reputation.provider", q.Value)
+	case "reputation-key":
+		if strings.TrimSpace(q.Key) == "" {
+			return nil, errors.New("paste an API key")
+		}
+		prov := reputation.SecretName(q.Name)
+		return nil, s.a.SetSecret(prov, q.Key)
+	case "reputation-clear-key":
+		prov := reputation.SecretName(q.Name)
+		return nil, s.a.SetSecret(prov, "")
+	case "otx-sync":
+		n, err := s.a.SyncOTXFeed(ctx)
+		return map[string]any{"imported": n}, err
+	case "hash-scan":
+		return s.a.BatchHashScan(ctx, q.Path, q.Limit)
 	case "test":
 		res := s.a.TestAI(ctx)
 		if len(res) == 0 {
@@ -732,6 +759,61 @@ func (s *server) ai(r *http.Request) (any, error) {
 		}
 		res.Features.Snippet = ""
 		return map[string]any{"result": res, "explanation": text, "model": model}, nil
+	}
+	return nil, errors.New("unknown action")
+}
+
+func (s *server) risk(r *http.Request) (any, error) {
+	if r.Method == http.MethodGet {
+		cfg := s.a.Config()
+		st := s.a.RiskState()
+		return map[string]any{
+			"config":    cfg.Risk,
+			"provider":  s.a.ActiveRiskProvider(),
+			"providers": risk.Providers,
+			"key_set":   secure.Secret("nvd") != "",
+			"state":     st,
+			"guidance":  risk.ComputeGuidance(st),
+		}, nil
+	}
+	q, err := body(r)
+	if err != nil {
+		return nil, err
+	}
+	ctx := r.Context()
+	switch q.Action {
+	case "provider":
+		return nil, s.a.Set("risk.provider", q.Value)
+	case "endpoint":
+		return nil, s.a.Set("risk.endpoint", q.Value)
+	case "set-key":
+		return nil, s.a.SetSecret("nvd", q.Key)
+	case "clear-key":
+		return nil, s.a.SetSecret("nvd", "")
+	case "sync":
+		st, g, err := s.a.SyncRiskExchange(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"state": st, "guidance": g}, nil
+	case "search":
+		advs, total, err := s.a.SearchRiskExchange(ctx, risk.SearchOptions{
+			Query:    q.Value,
+			Severity: q.Kind,
+			KEVOnly:  q.All,
+			Limit:    q.Limit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"total": total, "advisories": advs}, nil
+	case "scan-guided":
+		g := s.a.RiskGuidance()
+		paths := g.ExistingPaths()
+		if len(paths) > 0 {
+			return nil, s.startScan("targeted", paths, true, false)
+		}
+		return nil, s.startScan("quick", nil, true, false)
 	}
 	return nil, errors.New("unknown action")
 }

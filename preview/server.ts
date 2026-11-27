@@ -96,6 +96,54 @@ const DEF_PRESETS = [
   { name: "yara-community", url: "https://raw.githubusercontent.com/Yara-Rules/rules/master/index.yar", about: "Community YARA detection pack" },
 ];
 
+const REPUTATION_PROVIDERS = [
+  {
+    id: "virustotal",
+    name: "VirusTotal",
+    secret_name: "virustotal",
+    docs_url: "https://www.virustotal.com/gui/my-apikey",
+    docs_hint: "Multi-engine SHA-256 hash lookups via VirusTotal API v3 (x-apikey). Cached on disk to save daily quota.",
+    supports_bulk_sync: false,
+  },
+  {
+    id: "otx",
+    name: "AlienVault OTX",
+    secret_name: "otx",
+    docs_url: "https://otx.alienvault.com/api",
+    docs_hint: "Open Threat Exchange DirectConnect API v1 (X-OTX-API-KEY). Supports compact per-hash pulse lookups and bulk SHA-256 feed sync.",
+    supports_bulk_sync: true,
+  },
+  {
+    id: "both",
+    name: "VirusTotal + AlienVault OTX",
+    secret_name: "",
+    docs_url: "https://otx.alienvault.com/api",
+    docs_hint: "Checks AlienVault OTX first (higher rate limit) and falls back to VirusTotal only when needed, stopping on the first confirmed threat.",
+    supports_bulk_sync: true,
+  },
+];
+
+const RISK_PROVIDERS = [
+  {
+    id: "nvd",
+    name: "NIST NVD CVE 2.0",
+    endpoint: "https://services.nvd.nist.gov/rest/json/cves/2.0",
+    key_optional: true,
+    rate_limit_hint: "Free without key (5 req/30s) · Free NIST API key lifts limit to 50 req/30s",
+    docs_url: "https://nvd.nist.gov/developers/vulnerabilities",
+    docs_hint: "Search 250,000+ CVEs and CISA Known Exploited Vulnerabilities (KEV) for free via services.nvd.nist.gov/rest/json/cves/2.0.",
+  },
+  {
+    id: "custom",
+    name: "Custom HTTP/JSON Risk Feed",
+    endpoint: "",
+    key_optional: true,
+    rate_limit_hint: "Accepts NVD 2.0 JSON or a compact JSON advisory list from any HTTPS endpoint",
+    docs_url: "https://nvd.nist.gov/developers/vulnerabilities",
+    docs_hint: "Point Visionary at an internal or third-party HTTP/API vulnerability feed to guide where and how scans run.",
+  },
+];
+
 const nowIso = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString();
 
 const state = {
@@ -144,14 +192,85 @@ const state = {
         share_snippets: false,
       },
     },
+    reputation: {
+      provider: "both",
+      virustotal: true,
+      otx: true,
+      otx_last_sync: nowIso(-3600_000 * 2),
+    },
+    risk: {
+      enabled: true,
+      provider: "nvd",
+      endpoint: "",
+      kev_only: true,
+      min_severity: "HIGH",
+      auto_prioritize: true,
+    },
   },
   secrets: {
     gemini: Boolean(process.env.GEMINI_API_KEY),
     claude: false,
     openai: false,
     virustotal: true,
+    otx: true,
+    nvd: false,
     huggingface: false,
   } as Record<string, boolean>,
+  risk_state: {
+    synced_at: nowIso(-3600_000),
+    provider: "nvd",
+    total_match: 1248,
+    advisories: [
+      {
+        id: "CVE-2025-2783",
+        source: "nvd",
+        severity: "CRITICAL",
+        cvss: 9.8,
+        kev: true,
+        kev_name: "Google Chrome Mojo Sandbox Escape",
+        summary: "Incorrect handle provided in unspecified circumstances in Mojo in Google Chrome on Windows allowed a remote attacker to perform a sandbox escape.",
+        products: ["google/chrome"],
+        cwes: ["CWE-284"],
+        scan_hints: ["Google Chrome / Chromium"],
+      },
+      {
+        id: "CVE-2025-0411",
+        source: "nvd",
+        severity: "HIGH",
+        cvss: 7.0,
+        kev: true,
+        kev_name: "7-Zip Mark-of-the-Web Protection Bypass",
+        summary: "7-Zip before 24.09 allows crafted double-wrapped archives to bypass Windows Mark-of-the-Web (MotW) security warnings when extracting executables.",
+        products: ["7-zip"],
+        cwes: ["CWE-693"],
+        scan_hints: ["Archive Utilities (7-Zip / WinRAR)"],
+      },
+      {
+        id: "CVE-2024-38077",
+        source: "nvd",
+        severity: "CRITICAL",
+        cvss: 9.8,
+        kev: true,
+        kev_name: "Windows Remote Desktop Licensing Service RCE",
+        summary: "Heap-based buffer overflow in Windows Remote Desktop Licensing Service allows unauthenticated remote code execution.",
+        products: ["microsoft/windows"],
+        cwes: ["CWE-122"],
+        scan_hints: ["Windows Core & Remote Services"],
+      },
+      {
+        id: "CVE-2024-43451",
+        source: "nvd",
+        severity: "HIGH",
+        cvss: 6.5,
+        kev: true,
+        kev_name: "Windows NTLM Hash Disclosure Spoofing",
+        summary: "Minimal user interaction with a malicious shortcut or file in Downloads discloses NTLMv2 hashes to an attacker.",
+        products: ["microsoft/windows"],
+        cwes: ["CWE-200"],
+        scan_hints: ["Windows Core & Remote Services"],
+      },
+    ],
+  },
   ai_stats: {
     triaged: 14,
     convicted: 2,
@@ -382,6 +501,11 @@ function buildStatus(withWindows: boolean) {
     cloud_key_set: hasActiveCloudKey(),
     ai_stats: state.ai_stats,
     virustotal_key_set: state.secrets.virustotal,
+    otx_key_set: state.secrets.otx,
+    reputation_provider: state.config.reputation.provider,
+    risk_posture: "critical",
+    risk_kevs: state.risk_state.advisories.filter((a) => a.kev).length,
+    risk_targets: 3,
     quarantined: state.quarantine.length,
     behavior_learning: state.config.behavior.learning,
     behavior: state.behavior,
@@ -458,23 +582,24 @@ app.post("/api/protection", (req: Request, res: Response) => {
   res.status(400).json({ error: "unknown action" });
 });
 
-app.post("/api/scan", (req: Request, res: Response) => {
-  const { kind, paths, deep, quarantine } = req.body || {};
-  if (state.job.running) return res.status(400).json({ error: "a scan is already running" });
+function startSimulatedScan(kind: string, paths: string[] | undefined, deep: boolean, quarantine: boolean): string | null {
+  if (state.job.running) return "a scan is already running";
   if (kind === "targeted" && (!Array.isArray(paths) || !paths[0])) {
-    return res.status(400).json({ error: "enter a file or folder to scan" });
+    return "enter a file or folder to scan";
   }
   state.job.running = true;
   state.job.kind = kind || "quick";
   state.job.files = 0;
-  state.job.current = "Enumerating running processes, startup entries and risky folders…";
+  state.job.current = kind === "risk-guided"
+    ? "Prioritizing CISA KEV & CVE risk targets (Chrome, 7-Zip, Downloads, Temp)…"
+    : "Enumerating running processes, startup entries and risky folders…";
   state.job.detections = [];
   state.job.summary = null;
   state.job.error = "";
 
   const samples =
     kind === "targeted"
-      ? [String(paths[0])]
+      ? [String(paths?.[0] || "")]
       : [
           "C:\\Windows\\System32\\svchost.exe",
           "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
@@ -603,6 +728,13 @@ app.post("/api/scan", (req: Request, res: Response) => {
     }
   }, 450);
 
+  return null;
+}
+
+app.post("/api/scan", (req: Request, res: Response) => {
+  const { kind, paths, deep, quarantine } = req.body || {};
+  const err = startSimulatedScan(String(kind || "quick"), Array.isArray(paths) ? paths : undefined, Boolean(deep), Boolean(quarantine));
+  if (err) return res.status(400).json({ error: err });
   res.json({ ok: true });
 });
 
@@ -752,6 +884,13 @@ app.get("/api/ai", (_req: Request, res: Response) => {
     },
     ai_stats: state.ai_stats,
     vt_key_set: state.secrets.virustotal,
+    reputation_provider: state.config.reputation.provider,
+    reputation_providers: REPUTATION_PROVIDERS,
+    reputation_keys: {
+      virustotal: state.secrets.virustotal,
+      otx: state.secrets.otx,
+    },
+    otx_last_sync: state.config.reputation.otx_last_sync,
     recommended: RECOMMENDED_LOCAL,
     models: state.ollama_models,
     ollama: "running",
@@ -803,7 +942,114 @@ app.post("/api/ai", async (req: Request, res: Response) => {
     }
     case "vt-key":
       state.secrets.virustotal = Boolean(String(key || "").trim());
+      state.config.reputation.virustotal = state.secrets.virustotal;
       return res.json({ ok: true });
+    case "reputation-provider": {
+      const p = String(value || "").toLowerCase();
+      if (p !== "virustotal" && p !== "otx" && p !== "both") {
+        return res.status(400).json({ error: "provider must be virustotal, otx, or both" });
+      }
+      state.config.reputation.provider = p;
+      logEvent("system", "info", `Threat Exchange provider set to ${p}`);
+      return res.json({ ok: true });
+    }
+    case "reputation-key": {
+      if (!String(key || "").trim()) return res.status(400).json({ error: "paste an API key" });
+      const prov = name === "otx" ? "otx" : "virustotal";
+      state.secrets[prov] = true;
+      if (prov === "otx") state.config.reputation.otx = true;
+      else state.config.reputation.virustotal = true;
+      logEvent("system", "info", `Encrypted API key stored for ${prov === "otx" ? "AlienVault OTX" : "VirusTotal"}`);
+      return res.json({ ok: true });
+    }
+    case "reputation-clear-key": {
+      const prov = name === "otx" ? "otx" : "virustotal";
+      state.secrets[prov] = false;
+      if (prov === "otx") state.config.reputation.otx = false;
+      else state.config.reputation.virustotal = false;
+      logEvent("system", "info", `Removed API key for ${prov === "otx" ? "AlienVault OTX" : "VirusTotal"}`);
+      return res.json({ ok: true });
+    }
+    case "otx-sync": {
+      if (!state.secrets.otx) return res.status(400).json({ error: "no AlienVault OTX API key stored yet" });
+      const imported = 482;
+      state.config.reputation.otx_last_sync = nowIso();
+      state.defs.stats.hashes += imported;
+      state.defs.stats.revision++;
+      const idx = state.defs.sources.findIndex((s) => s.name === "otx-subscribed");
+      const entry = {
+        name: "otx-subscribed",
+        kind: "hashes",
+        origin: "otx.alienvault.com/api/v1/indicators/export",
+        count: (idx >= 0 ? state.defs.sources[idx].count : 0) + imported,
+        imported_at: nowIso(),
+        channel: "otx",
+      };
+      if (idx >= 0) state.defs.sources[idx] = entry;
+      else state.defs.sources.unshift(entry);
+      logEvent("definitions", "info", `Synced ${imported} SHA-256 indicators from AlienVault OTX bulk feed`);
+      return res.json({ imported });
+    }
+    case "hash-scan": {
+      const target = String(fpath || "").trim() || "C:\\Users\\Analyst\\Downloads";
+      const prov = state.config.reputation.provider === "otx" ? "AlienVault OTX" : state.config.reputation.provider === "both" ? "AlienVault OTX + VirusTotal" : "VirusTotal";
+      return res.json({
+        target,
+        provider: prov,
+        files: 4,
+        unique_hashes: 4,
+        cache_hits: 2,
+        live_queries: 2,
+        malicious: 1,
+        suspicious: 1,
+        clean: 2,
+        unknown: 0,
+        items: [
+          {
+            path: `${target}\\Invoice_Q4_Viewer.hta`,
+            sha256: "464535ead01ac837e1329effb49e4d8074b466eb70fe0949410e75b68c2a61e6",
+            size: 18420,
+            verdict: "malicious",
+            malicious: 41,
+            total: 72,
+            label: "OTX.AgentTesla",
+            detail: "41 of 72 engines on VirusTotal flag this hash",
+            cached: false,
+          },
+          {
+            path: `${target}\\packed-utility-setup.exe`,
+            sha256: "9b74c9897bac770ffc029102a200c5de5e9835b7c74a4d3020a79a6a12d5e801",
+            size: 4218880,
+            verdict: "suspicious",
+            malicious: 2,
+            total: 72,
+            label: "reputation:low-detections",
+            detail: "2 threat pulses on AlienVault OTX",
+            cached: false,
+          },
+          {
+            path: `${target}\\7z2409-x64.exe`,
+            sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            size: 1621400,
+            verdict: "clean",
+            malicious: 0,
+            total: 72,
+            detail: "0 of 72 engines on VirusTotal flag this hash",
+            cached: true,
+          },
+          {
+            path: `${target}\\VSCodeUserSetup-x64.exe`,
+            sha256: "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
+            size: 98421100,
+            verdict: "clean",
+            malicious: 0,
+            total: 72,
+            detail: "0 of 72 engines on VirusTotal flag this hash",
+            cached: true,
+          },
+        ],
+      });
+    }
     case "hf-token":
       state.secrets.huggingface = Boolean(String(key || "").trim());
       return res.json({ ok: true });
@@ -988,6 +1234,80 @@ app.post("/api/ai", async (req: Request, res: Response) => {
   }
 });
 
+app.get("/api/risk", (_req: Request, res: Response) => {
+  const advs = state.risk_state.advisories;
+  const kevCount = advs.filter((a) => a.kev).length;
+  const critCount = advs.filter((a) => a.severity === "CRITICAL").length;
+  const highCount = advs.filter((a) => a.severity === "HIGH").length;
+  res.json({
+    config: state.config.risk,
+    provider: state.config.risk.provider,
+    providers: RISK_PROVIDERS,
+    key_set: state.secrets.nvd,
+    state: state.risk_state,
+    guidance: {
+      posture: kevCount > 0 ? "critical" : critCount > 0 ? "elevated" : "standard",
+      recommend_deep: kevCount > 0 || critCount > 0,
+      recommend_archives: true,
+      reason: `${kevCount} actively exploited CISA KEV advisories in feed — recommend Deep scan with Archive inspection & Threat Exchange escalation.`,
+      advisory_count: advs.length,
+      kev_count: kevCount,
+      critical_count: critCount,
+      high_count: highCount,
+      synced_at: state.risk_state.synced_at,
+      priority_targets: [
+        { product: "Google Chrome / Chromium", reason: "1 matched CVE (includes CISA KEV actively exploited)", paths: ["C:\\Program Files\\Google\\Chrome\\Application", "C:\\Users\\Analyst\\Downloads"], cves: ["CVE-2025-2783"], severity: "CRITICAL", kev: true },
+        { product: "Archive Utilities (7-Zip / WinRAR)", reason: "1 matched CVE (includes CISA KEV actively exploited)", paths: ["C:\\Program Files\\7-Zip", "C:\\Users\\Analyst\\Downloads"], cves: ["CVE-2025-0411"], severity: "HIGH", kev: true },
+        { product: "Windows Core & Remote Services", reason: "2 matched CVEs (includes CISA KEV actively exploited)", paths: ["C:\\Users\\Analyst\\Downloads", "C:\\Users\\Analyst\\AppData\\Local\\Temp"], cves: ["CVE-2024-38077", "CVE-2024-43451"], severity: "CRITICAL", kev: true },
+      ],
+    },
+  });
+});
+
+app.post("/api/risk", (req: Request, res: Response) => {
+  const { action, value, key, kind, all } = req.body || {};
+  switch (action) {
+    case "provider":
+      state.config.risk.provider = value === "custom" ? "custom" : "nvd";
+      return res.json({ ok: true });
+    case "endpoint":
+      state.config.risk.endpoint = String(value || "").trim();
+      return res.json({ ok: true });
+    case "set-key":
+      state.secrets.nvd = Boolean(String(key || "").trim());
+      return res.json({ ok: true });
+    case "clear-key":
+      state.secrets.nvd = false;
+      return res.json({ ok: true });
+    case "sync":
+      state.risk_state.synced_at = nowIso();
+      logEvent("system", "info", `Risk Exchange synced ${state.risk_state.advisories.length} advisories from NIST NVD CVE 2.0`);
+      return res.json({
+        state: state.risk_state,
+        guidance: { posture: "critical", kev_count: state.risk_state.advisories.filter((a) => a.kev).length },
+      });
+    case "search": {
+      const q = String(value || "").toLowerCase().trim();
+      const sev = String(kind || "").toUpperCase();
+      const filtered = state.risk_state.advisories.filter((a) => {
+        if (all && !a.kev) return false;
+        if (sev && a.severity !== sev) return false;
+        if (!q) return true;
+        return a.id.toLowerCase().includes(q) || a.summary.toLowerCase().includes(q) || a.products.some((p) => p.toLowerCase().includes(q));
+      });
+      return res.json({ total: filtered.length, advisories: filtered });
+    }
+    case "scan-guided": {
+      const err = startSimulatedScan("risk-guided", undefined, true, false);
+      if (err) return res.status(400).json({ error: err });
+      logEvent("scan", "info", "Risk-guided deep scan triggered from Risk Exchange");
+      return res.json({ ok: true });
+    }
+    default:
+      return res.status(400).json({ error: "unknown action" });
+  }
+});
+
 app.get("/api/settings", (_req: Request, res: Response) => {
   res.json({ config: state.config, user: state.user });
 });
@@ -1009,6 +1329,10 @@ app.post("/api/settings", (req: Request, res: Response) => {
         const v = String(value || "").trim();
         state.config.ai.local.keep_alive = v === "0" ? "0s" : v;
       }
+      else if (key === "risk.enabled") state.config.risk.enabled = bool;
+      else if (key === "risk.kev_only") state.config.risk.kev_only = bool;
+      else if (key === "risk.auto_prioritize") state.config.risk.auto_prioritize = bool;
+      else if (key === "risk.min_severity") state.config.risk.min_severity = String(value || "HIGH").toUpperCase();
       else if (key === "ai.confidence_threshold") {
         const n = Number(value);
         if (Number.isNaN(n) || n < 0.5 || n > 0.99) return res.status(400).json({ error: "threshold must be between 0.50 and 0.99" });

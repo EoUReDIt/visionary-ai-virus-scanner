@@ -81,7 +81,26 @@ type AI struct {
 }
 
 type Reputation struct {
-	VirusTotal bool `json:"virustotal"`
+	Provider    string `json:"provider,omitempty"`      // virustotal | otx | both
+	VirusTotal  bool   `json:"virustotal"`
+	OTX         bool   `json:"otx,omitempty"`
+	OTXLastSync string `json:"otx_last_sync,omitempty"` // RFC3339 cursor for compact incremental OTX feed export
+}
+
+// Enabled reports whether any Threat Exchange hash reputation provider is active.
+func (r Reputation) Enabled() bool {
+	return r.VirusTotal || r.OTX
+}
+
+// RiskExchange configures HTTP/API vulnerability feeds (such as NIST NVD CVE 2.0)
+// that guide where Visionary checks and how aggressively it scans.
+type RiskExchange struct {
+	Enabled        bool   `json:"enabled"`
+	Provider       string `json:"provider,omitempty"`      // nvd | custom
+	Endpoint       string `json:"endpoint,omitempty"`      // optional custom HTTP/JSON endpoint
+	KEVOnly        bool   `json:"kev_only"`                // focus on CISA Known Exploited Vulnerabilities
+	MinSeverity    string `json:"min_severity,omitempty"`  // CRITICAL | HIGH | MEDIUM | LOW
+	AutoPrioritize bool   `json:"auto_prioritize"`         // merge high-risk CVE targets into Quick Scans
 }
 
 type Channel struct {
@@ -130,9 +149,10 @@ type Config struct {
 	Protection Protection `json:"protection"`
 	Realtime   Realtime   `json:"realtime"`
 	Scan       Scan       `json:"scan"`
-	AI         AI         `json:"ai"`
-	Reputation Reputation `json:"reputation"`
-	Channels   []Channel  `json:"channels"`
+	AI         AI           `json:"ai"`
+	Reputation Reputation   `json:"reputation"`
+	Risk       RiskExchange `json:"risk"`
+	Channels   []Channel    `json:"channels"`
 	Behavior   Behavior   `json:"behavior"`
 	Security   Security   `json:"security"`
 	GameMode   GameMode   `json:"game_mode"`
@@ -189,6 +209,13 @@ func defaults() *Config {
 				Model: "qwen3:1.7b", MaxParamsB: 3.0,
 			},
 			Cloud: CloudAI{Provider: "gemini", Model: "gemini-2.5-flash"},
+		},
+		Risk: RiskExchange{
+			Enabled:        true,
+			Provider:       "nvd",
+			KEVOnly:        true,
+			MinSeverity:    "HIGH",
+			AutoPrioritize: true,
 		},
 		Behavior: Behavior{Enabled: true, LearnDays: 3, Threshold: 50},
 		Security: Security{RequirePasswordToDisable: false},

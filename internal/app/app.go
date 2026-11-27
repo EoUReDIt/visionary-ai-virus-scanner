@@ -24,6 +24,7 @@ import (
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/plat"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/reputation"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/risk"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/secure"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/winsec"
 )
@@ -62,8 +63,23 @@ func (a *App) load() error {
 	if d := winsec.New(); d != nil {
 		eng.Defender = d
 	}
-	if key := secure.Secret("virustotal"); key != "" && cfg.Reputation.VirusTotal {
-		eng.Rep = reputation.NewVirusTotal(key)
+	repCache := reputation.OpenCache(config.Path("reputation_cache.json"))
+	repProv := activeRepProvider(cfg)
+	var repList []reputation.Provider
+	if repProv == "otx" || repProv == "both" {
+		if key := secure.Secret("otx"); key != "" && (cfg.Reputation.OTX || repProv == "otx") {
+			repList = append(repList, reputation.NewOTXWithCache(key, repCache))
+		}
+	}
+	if repProv == "virustotal" || repProv == "both" {
+		if key := secure.Secret("virustotal"); key != "" && (cfg.Reputation.VirusTotal || repProv == "virustotal") {
+			repList = append(repList, reputation.NewVirusTotalWithCache(key, repCache))
+		}
+	}
+	if len(repList) == 1 {
+		eng.Rep = repList[0]
+	} else if len(repList) > 1 {
+		eng.Rep = reputation.NewMulti(repList...)
 	}
 	triage := ai.NewTriageWithSecrets(cfg, map[string]string{
 		"gemini":    secure.Secret("gemini"),
@@ -318,6 +334,11 @@ type Status struct {
 	CloudKey      bool             `json:"cloud_key_set"`
 	AIStats       engine.AIStats   `json:"ai_stats"`
 	VTKey         bool             `json:"virustotal_key_set"`
+	OTXKey        bool             `json:"otx_key_set"`
+	RepProvider   string           `json:"reputation_provider"`
+	RiskPosture   string           `json:"risk_posture"`
+	RiskKEVs      int              `json:"risk_kevs"`
+	RiskTargets   int              `json:"risk_targets"`
 	Quarantine    int              `json:"quarantined"`
 	Learning      bool             `json:"behavior_learning"`
 	Behavior      behavior.Summary `json:"behavior"`
@@ -359,6 +380,37 @@ func (a *App) HasCloudKey() bool {
 	return secure.Secret(ai.CloudSecretName(a.ActiveCloudProvider())) != ""
 }
 
+func activeRepProvider(cfg *config.Config) string {
+	if p := reputation.NormalizeProvider(cfg.Reputation.Provider); p != "" {
+		return p
+	}
+	vt := cfg.Reputation.VirusTotal || secure.Secret("virustotal") != ""
+	otx := cfg.Reputation.OTX || secure.Secret("otx") != ""
+	switch {
+	case vt && otx:
+		return "both"
+	case otx:
+		return "otx"
+	default:
+		return "virustotal"
+	}
+}
+
+func (a *App) ActiveReputationProvider() string {
+	return activeRepProvider(a.Config())
+}
+
+func (a *App) HasReputationKey() bool {
+	switch a.ActiveReputationProvider() {
+	case "otx":
+		return secure.Secret("otx") != ""
+	case "both":
+		return secure.Secret("otx") != "" || secure.Secret("virustotal") != ""
+	default:
+		return secure.Secret("virustotal") != ""
+	}
+}
+
 func (a *App) Status(withWindows bool) *Status {
 	cfg := a.Config()
 	on, why := a.ProtectionActive()
@@ -367,12 +419,16 @@ func (a *App) Status(withWindows bool) *Status {
 	if sens == "" {
 		sens = "balanced"
 	}
+	rg := a.RiskGuidance()
 	s := &Status{
 		Version: config.Version, Edition: edition.Name, Protection: on, ProtReason: why, GuardAlive: GuardAlive(),
 		GameMode: a.GameMode(), Profile: cfg.Profile, Defs: a.db.Stats(), Channels: len(cfg.Channels),
 		AIMode: cfg.AI.Mode, AISensitivity: sens, CloudProvider: cloudProv,
-		CloudKey: a.HasCloudKey(), AIStats: a.Engine().AIStats(), VTKey: secure.Secret("virustotal") != "",
-		Quarantine: len(engine.QuarantineList()), Learning: a.Learning(),
+		CloudKey: a.HasCloudKey(), AIStats: a.Engine().AIStats(),
+		VTKey: secure.Secret("virustotal") != "", OTXKey: secure.Secret("otx") != "",
+		RepProvider: activeRepProvider(cfg),
+		RiskPosture: rg.Posture, RiskKEVs: rg.KEVCount, RiskTargets: len(rg.PriorityTargets),
+		Quarantine:  len(engine.QuarantineList()), Learning: a.Learning(),
 		Behavior: behavior.Summarize(behavior.Load()), BootScan: BootScanPending(),
 		Admin: plat.IsAdmin(), DataDir: config.Dir(), Warnings: a.Warnings,
 	}
@@ -431,19 +487,103 @@ func (a *App) logDetection(origin string, r *engine.Result) {
 }
 
 // QuickScan covers where malware lives and starts: running programs,
-// autoruns, startup folders, temp and download folders.
+// autoruns, startup folders, temp and download folders — plus any priority
+// locations highlighted by active Risk Exchange CVE advisories.
 func (a *App) QuickScan(ctx context.Context, o ScanOptions, progress func(*engine.Result)) *engine.Summary {
 	targets := plat.QuickScanTargets()
+	seen := map[string]bool{}
+	for _, t := range targets {
+		seen[strings.ToLower(t)] = true
+	}
+	if cfg := a.Config(); cfg.Risk.Enabled && cfg.Risk.AutoPrioritize {
+		g := a.RiskGuidance()
+		for _, p := range g.ExistingPaths() {
+			k := strings.ToLower(p)
+			if !seen[k] {
+				seen[k] = true
+				targets = append(targets, p)
+			}
+		}
+		if g.RecommendDeep && !o.Deep {
+			o.Deep = true
+		}
+	}
 	if procs, err := plat.ListProcesses(); err == nil {
-		seen := map[string]bool{}
 		for _, p := range procs {
-			if p.Exe != "" && !seen[p.Exe] {
-				seen[p.Exe] = true
+			if p.Exe != "" && !seen[strings.ToLower(p.Exe)] {
+				seen[strings.ToLower(p.Exe)] = true
 				targets = append(targets, p.Exe)
 			}
 		}
 	}
 	return a.finish("quick", a.Engine().ScanPaths(ctx, targets, a.engineOpts(o), progress))
+}
+
+// ---- Risk Exchange (HTTP/API CVE providers & scan guidance) ----
+
+func (a *App) ActiveRiskProvider() string {
+	p := risk.NormalizeProvider(a.Config().Risk.Provider)
+	if p == "" {
+		return "nvd"
+	}
+	return p
+}
+
+func (a *App) riskClient() risk.Provider {
+	cfg := a.Config().Risk
+	prov := a.ActiveRiskProvider()
+	return risk.NewNVD(secure.Secret("nvd"), cfg.Endpoint, prov == "custom")
+}
+
+func (a *App) RiskState() risk.State {
+	return risk.LoadState("")
+}
+
+func (a *App) RiskGuidance() risk.Guidance {
+	return risk.ComputeGuidance(risk.LoadState(""))
+}
+
+// SyncRiskExchange fetches active high-risk/KEV CVEs from the configured
+// HTTP/API provider (NIST NVD CVE 2.0 by default — free without an API key)
+// and updates local scan guidance.
+func (a *App) SyncRiskExchange(ctx context.Context) (risk.State, risk.Guidance, error) {
+	cfg := a.Config().Risk
+	sev := cfg.MinSeverity
+	if sev == "" {
+		sev = "HIGH"
+	}
+	opts := risk.SearchOptions{
+		KEVOnly:  cfg.KEVOnly,
+		Severity: sev,
+		Limit:    25,
+	}
+	// If KEVOnly is requested alongside HIGH, NVD's `hasKev` filter already
+	// focuses on actively exploited CVEs regardless of CVSS band.
+	if opts.KEVOnly && strings.EqualFold(sev, "HIGH") {
+		opts.Severity = ""
+	}
+	advs, total, err := a.riskClient().Search(ctx, opts)
+	if err != nil {
+		return risk.State{}, risk.Guidance{}, err
+	}
+	st := risk.State{
+		SyncedAt:   time.Now().UTC().Format(time.RFC3339),
+		Provider:   a.ActiveRiskProvider(),
+		TotalMatch: total,
+		Advisories: advs,
+	}
+	if err := risk.SaveState("", st); err != nil {
+		return st, risk.ComputeGuidance(st), err
+	}
+	g := risk.ComputeGuidance(st)
+	a.Log("system", "info", fmt.Sprintf("Risk Exchange synced %d advisories (%d KEV) — scan posture: %s", len(advs), g.KEVCount, g.Posture), nil)
+	return st, g, nil
+}
+
+// SearchRiskExchange runs an on-demand CVE search against the configured
+// Risk Exchange HTTP/API provider.
+func (a *App) SearchRiskExchange(ctx context.Context, opts risk.SearchOptions) ([]risk.Advisory, int, error) {
+	return a.riskClient().Search(ctx, opts)
 }
 
 // TargetedScan scans exactly the files and folders given.
@@ -607,8 +747,44 @@ func (a *App) Set(key, value string) error {
 			return needBool(&c.Security.RequirePasswordToDisable)
 		case "windows.defender_second_opinion":
 			return needBool(&c.Windows.DefenderSecondOpinion)
+		case "reputation.provider":
+			p := reputation.NormalizeProvider(value)
+			if p == "" {
+				return errors.New("reputation.provider must be virustotal, otx, or both")
+			}
+			c.Reputation.Provider = p
+			if p == "otx" || p == "both" {
+				c.Reputation.OTX = secure.Secret("otx") != ""
+			}
+			if p == "virustotal" || p == "both" {
+				c.Reputation.VirusTotal = secure.Secret("virustotal") != ""
+			}
 		case "reputation.virustotal":
 			return needBool(&c.Reputation.VirusTotal)
+		case "reputation.otx":
+			return needBool(&c.Reputation.OTX)
+		case "risk.enabled":
+			return needBool(&c.Risk.Enabled)
+		case "risk.provider":
+			p := risk.NormalizeProvider(value)
+			if p == "" {
+				return errors.New("risk.provider must be nvd or custom")
+			}
+			c.Risk.Provider = p
+		case "risk.endpoint":
+			c.Risk.Endpoint = strings.TrimSpace(value)
+		case "risk.kev_only":
+			return needBool(&c.Risk.KEVOnly)
+		case "risk.auto_prioritize":
+			return needBool(&c.Risk.AutoPrioritize)
+		case "risk.min_severity":
+			sev := strings.ToUpper(strings.TrimSpace(value))
+			switch sev {
+			case "CRITICAL", "HIGH", "MEDIUM", "LOW":
+				c.Risk.MinSeverity = sev
+			default:
+				return errors.New("risk.min_severity must be CRITICAL, HIGH, MEDIUM, or LOW")
+			}
 		case "ai.sensitivity":
 			switch strings.ToLower(value) {
 			case "conservative", "balanced", "proactive":
