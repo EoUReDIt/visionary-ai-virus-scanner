@@ -15,7 +15,7 @@ PKG="github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
 mkdir -p dist
 
 go vet ./... && go test ./...
-go vet -tags lite ./... && go test -tags lite ./internal/config ./internal/ai ./internal/app
+go vet -tags lite ./... && go test -tags lite ./...
 go vet -tags safe ./... && go test -tags safe ./...
 
 export GOOS=windows GOARCH=amd64 CGO_ENABLED=0
@@ -23,12 +23,14 @@ export GOOS=windows GOARCH=amd64 CGO_ENABLED=0
 go build -trimpath -ldflags "-X $PKG.Version=$VERSION" -o dist/visionary.exe ./cmd/visionary
 go build -trimpath -ldflags "-H=windowsgui -X $PKG.Version=$VERSION" -o dist/VisionaryUI.exe ./cmd/visionary
 go build -trimpath -tags lite -ldflags "-X $PKG.Version=$VERSION" -o dist/visionary-lite.exe ./cmd/visionary
+go build -trimpath -tags lite -ldflags "-H=windowsgui -X $PKG.Version=$VERSION" -o dist/VisionaryUI-Lite.exe ./cmd/visionary
 go build -trimpath -tags safe -ldflags "-X $PKG.Version=$VERSION" -o dist/visionary-safe.exe ./cmd/visionary
 go build -trimpath -tags safe -ldflags "-H=windowsgui -X $PKG.Version=$VERSION" -o dist/VisionaryUI-Safe.exe ./cmd/visionary
 
 cp dist/visionary.exe "dist/visionary-core-${VERSION}-windows-amd64.exe"
 cp dist/VisionaryUI.exe "dist/VisionaryUI-Core-${VERSION}-windows-amd64.exe"
 cp dist/visionary-lite.exe "dist/visionary-lite-${VERSION}-windows-amd64.exe"
+cp dist/VisionaryUI-Lite.exe "dist/VisionaryUI-Lite-${VERSION}-windows-amd64.exe"
 cp dist/visionary-safe.exe "dist/visionary-safe-${VERSION}-windows-amd64.exe"
 cp dist/VisionaryUI-Safe.exe "dist/VisionaryUI-Safe-${VERSION}-windows-amd64.exe"
 

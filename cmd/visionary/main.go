@@ -162,30 +162,14 @@ func main() {
 		}
 		return
 	}
-	// If double-clicked directly in Windows Explorer with no arguments:
-	// - Core/Safe editions open the dashboard so the user sees the app immediately.
-	// - Lite edition prints live status and common commands, then waits so the window does not vanish.
+	// If double-clicked directly in Windows Explorer with no arguments, open the
+	// lightweight web dashboard so the user sees the app immediately (all editions).
 	if len(argv) == 0 && plat.LaunchedFromExplorer() {
-		if !edition.Lite {
-			if err := serveUI(interruptible(), a, 0, true, true); err != nil {
-				fmt.Fprintln(os.Stderr, red("error: ")+err.Error())
-				fmt.Print("\nPress Enter to close...")
-				_, _ = fmt.Scanln()
-			}
-			return
+		if err := serveUI(interruptible(), a, 0, true, true); err != nil {
+			fmt.Fprintln(os.Stderr, red("error: ")+err.Error())
+			fmt.Print("\nPress Enter to close...")
+			_, _ = fmt.Scanln()
 		}
-		if app.GuardAlive() {
-			fmt.Println(yellow("Note: Visionary Real-Time Protection is already running in the background (no duplicate instance started).\n"))
-		}
-		cmdStatus(a)
-		fmt.Println("\nVisionary Lite is CLI-only (no web dashboard) to stay minimal in RAM and CPU.")
-		fmt.Println("Open PowerShell or Command Prompt and run:")
-		fmt.Println("  visionary status                 check protection & service")
-		fmt.Println("  visionary scan quick --deep      run a quick scan with AI triage")
-		fmt.Println("  visionary ai status              check local & cloud AI configuration")
-		fmt.Println("  visionary help                   list all commands")
-		fmt.Print("\nPress Enter to close...")
-		_, _ = fmt.Scanln()
 		return
 	}
 	if len(argv) == 0 || argv[0] == "help" || argv[0] == "-h" || argv[0] == "--help" {

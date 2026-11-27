@@ -227,7 +227,7 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 	s.tray = tray.Start(uiCtx, tray.Callbacks{
 		Status: func() tray.Info {
 			s.a.Reload()
-			return tray.Compute(s.a.Status(false))
+			return tray.Compute(s.a.Status(false)).WithHost(s.host)
 		},
 		OnOpen: func() {
 			_ = plat.OpenBrowser(dashURL)
@@ -402,6 +402,7 @@ func body(r *http.Request) (req, error) {
 
 type statusResponse struct {
 	*app.Status
+	UIHost     string     `json:"ui_host,omitempty"`
 	TrayState  tray.State `json:"tray_state"`
 	TrayLabel  string     `json:"tray_label"`
 	TrayDetail string     `json:"tray_detail"`
@@ -410,9 +411,10 @@ type statusResponse struct {
 func (s *server) status(r *http.Request) (any, error) {
 	s.a.Reload()
 	st := s.a.Status(r.URL.Query().Get("windows") == "1")
-	ti := tray.Compute(st)
+	ti := tray.Compute(st).WithHost(s.host)
 	return statusResponse{
 		Status:     st,
+		UIHost:     s.host,
 		TrayState:  ti.State,
 		TrayLabel:  ti.Label,
 		TrayDetail: ti.Detail,

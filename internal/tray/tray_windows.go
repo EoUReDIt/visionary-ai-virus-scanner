@@ -435,7 +435,11 @@ func (c *Controller) showContextMenu(hwnd uintptr) {
 	header := info.Edition + " — " + info.Label
 	appendMenuItem(hMenu, mfString|mfGrayed|mfDisabled, 0, header)
 	appendMenuItem(hMenu, mfSeparator, 0, "")
-	appendMenuItem(hMenu, mfString, cmdOpen, "Open Visionary Dashboard")
+	openLabel := "Open Visionary Web UI"
+	if info.Host != "" {
+		openLabel += " (" + info.Host + ")"
+	}
+	appendMenuItem(hMenu, mfString, cmdOpen, openLabel)
 	appendMenuItem(hMenu, mfString, cmdQuickScan, "Run Quick Scan")
 	appendMenuItem(hMenu, mfSeparator, 0, "")
 

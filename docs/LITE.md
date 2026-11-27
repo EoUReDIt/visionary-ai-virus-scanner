@@ -15,8 +15,9 @@ plain CPU Go code. Only the optional local-AI layer can touch a GPU (via Ollama/
 Build: `go build -tags lite ./cmd/visionary` or `scripts/build.sh` -> `dist/visionary-lite.exe` and
 `Visionary-Lite-Setup-<ver>.exe`. `visionary version|status` print `lite edition`.
 
-1. **No dashboard**: `internal/ui` and its embedded page are not linked; `visionary ui` explains this.
-   Everything is a command (the CLI-first rule).
+1. **On-demand lightweight Web UI**: embeds a single ~75 KB zero-dependency HTML page served by
+   Go's standard library only when opened (`VisionaryUI.exe` or `visionary ui`). When closed, the
+   background protection service runs zero web server overhead. Every feature still works CLI-first.
 2. **`lite` profile / defaults** (`config.ApplyLite`, also `visionary profile lite` on the full edition):
    1 scan worker, 1 real-time worker, 2 s settle delay, 3 s process poll, 32 MB file cap,
    AI budget 5, game mode auto.
@@ -26,8 +27,9 @@ Build: `go build -tags lite ./cmd/visionary` or `scripts/build.sh` -> `dist/visi
    default model `gemma3:1b`; `ai recommend` lists only models under the ceiling.
 4. **Budget check**: `scripts/idle-budget.sh` fails CI if the idle guard exceeds 40 MB RSS or 3% CPU
    (Linux); a Windows working-set check runs on the Windows job.
-5. **Installer**: `makensis -DLITE ...` builds a Lite installer (no dashboard, no UI shortcuts). Lite and
-   full share one install location and uninstaller.
+5. **Installer**: `makensis -DLITE ...` builds the Lite installer with `visionary.exe` and
+   `VisionaryUI.exe` (sign-in system tray auto-start is opt-in to keep idle footprint minimal).
+   Lite, Core, and Safe share one install location and uninstaller.
 
 New tunables (also `visionary settings set`): `realtime.workers`, `realtime.settle_ms`, `behavior.poll_ms`.
 

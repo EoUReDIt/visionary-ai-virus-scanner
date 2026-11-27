@@ -920,10 +920,12 @@ function renderTrayMenu(s, tr) {
     on: { click: () => { closeTrayMenu(); fn(); } }
   }), el("span", {}, label), opts && opts.badge ? el("span", { class: "st " + opts.badgeCls }, opts.badge) : null);
 
+  const uiAddr = s.ui_host || location.host || "127.0.0.1:7878";
   fill(pop,
     el("div", { class: "tray-head" },
       el("div", { class: "tray-head-t" }, tr.label),
-      el("div", { class: "tray-head-s" }, tr.detail)),
+      el("div", { class: "tray-head-s" }, tr.detail),
+      el("div", { class: "tray-head-s num", style: "font-family:var(--mono);margin-top:3px" }, "http://" + uiAddr)),
     item("Open Overview", () => show("overview"), { primary: true }),
     item("Run Quick Scan", () => { show("scan"); setTimeout(() => startScan("quick", $("bQuick")), 50); }),
     s.quarantined > 0 ? item("Review Quarantined Threats", () => show("threats"), { badge: String(s.quarantined), badgeCls: "t-bad" }) : null,
@@ -945,6 +947,7 @@ async function refresh() {
   } catch (e) { toast(e.message, true); return; }
   const s = status;
   const tr = deriveTray(s);
+  const uiAddr = s.ui_host || location.host || "127.0.0.1:7878";
   updateFavicon(tr.state);
   $("brandMark").className = "brand-mark" + (tr.state === "paused" ? " paused" : tr.state === "warning" ? " off" : "");
   fill($("brandMark"), icon(shieldGlyph(tr.state)));
@@ -962,6 +965,7 @@ async function refresh() {
       el("span", { class: "tray-meta" },
         el("div", { class: "tray-t" }, "Tray: " + (tr.state === "active" ? "Active" : tr.state === "paused" ? "Paused" : "Warning")),
         el("div", { class: "tray-s" }, tr.label))),
+    el("div", { class: "num", style: "padding:0 4px;font-family:var(--mono);font-size:11px" }, "http://" + uiAddr),
     el("div", { class: "num", style: "padding:0 4px" }, "v" + s.version + " · " + (s.profile || "balanced")));
   const q = $("c-threats"); q.hidden = !s.quarantined; q.textContent = s.quarantined;
 

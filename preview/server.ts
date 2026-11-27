@@ -388,6 +388,7 @@ function buildStatus(withWindows: boolean) {
     admin: state.admin,
     data_dir: state.data_dir,
     windows_security: withWindows ? state.windows_security : undefined,
+    ui_host: `127.0.0.1:7878`,
     ...tray,
   };
 }

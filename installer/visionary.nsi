@@ -24,7 +24,7 @@ Unicode true
 
 !ifdef LITE
   !define APP "Visionary Lite"
-  !define APP_DESC "Visionary Lite AI Antivirus (CPU-only CLI)"
+  !define APP_DESC "Visionary Lite AI Antivirus (Low-Footprint + Web UI)"
   !ifndef OUTFILE
     !define OUTFILE "..\dist\Visionary-Lite-Setup-${VERSION}.exe"
   !endif
@@ -74,27 +74,17 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Visionary Contributors"
   !define MUI_WELCOMEPAGE_TEXT "This wizard installs ${APP} ${VERSION} on your PC.$\r$\n$\r$\nVisionary layers fast local detection (hashes, YARA rules, full PE/script heuristics, certificate checks, LOLBin behaviour monitoring) with optional local (<3B) and cloud AI triage.$\r$\n$\r$\nClick Next to continue."
 !endif
 
-!ifdef LITE
-  !define MUI_FINISHPAGE_RUN ""
-  !define MUI_FINISHPAGE_RUN_FUNCTION LaunchLiteConsole
-  !define MUI_FINISHPAGE_RUN_TEXT "Open Visionary Lite console (show status & commands)"
-
-Function LaunchLiteConsole
-  Exec '"$SYSDIR\cmd.exe" /k ""$INSTDIR\visionary.exe" status & echo. & echo Commands: visionary scan quick --deep ^| visionary ai status ^| visionary help"'
-FunctionEnd
-!else
-  ; Launch through explorer.exe so the dashboard opens in the user's normal
-  ; (non-elevated) desktop session and opens the browser cleanly.
-  ; A function is used because newer NSIS/MUI2 builds mis-quote RUN_PARAMETERS
-  ; (the embedded quotes make Exec receive 2 parameters and abort the build).
-  !define MUI_FINISHPAGE_RUN ""
-  !define MUI_FINISHPAGE_RUN_FUNCTION LaunchDashboard
-  !define MUI_FINISHPAGE_RUN_TEXT "Open the ${APP} dashboard"
+; Launch through explorer.exe so the web dashboard opens in the user's normal
+; (non-elevated) desktop session and opens the browser cleanly.
+; A function is used because newer NSIS/MUI2 builds mis-quote RUN_PARAMETERS
+; (the embedded quotes make Exec receive 2 parameters and abort the build).
+!define MUI_FINISHPAGE_RUN ""
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchDashboard
+!define MUI_FINISHPAGE_RUN_TEXT "Open the ${APP} web dashboard"
 
 Function LaunchDashboard
   Exec '"$WINDIR\explorer.exe" "$INSTDIR\VisionaryUI.exe"'
 FunctionEnd
-!endif
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_COMPONENTS
@@ -132,12 +122,8 @@ Section "${APP} (required)" SecCore
 
   SetOutPath "$INSTDIR"
 !ifdef LITE
-  ; Switching to Lite removes the dashboard binary, tray startup entry and UI shortcuts.
-  Delete "$INSTDIR\VisionaryUI.exe"
-  Delete "$SMPROGRAMS\Visionary\Visionary.lnk"
-  Delete "$DESKTOP\Visionary.lnk"
-  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "VisionaryTray"
   File /oname=visionary.exe "${BINDIR}\visionary-lite.exe"
+  File /oname=VisionaryUI.exe "${BINDIR}\VisionaryUI-Lite.exe"
 !else
   !ifdef SAFE
     File /oname=visionary.exe "${BINDIR}\visionary-safe.exe"
@@ -156,11 +142,7 @@ Section "${APP} (required)" SecCore
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${APP}"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "Visionary"
-!ifdef LITE
-  WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\visionary.exe"
-!else
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\VisionaryUI.exe"
-!endif
   WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegStr HKLM "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
@@ -173,11 +155,7 @@ Section "${APP} (required)" SecCore
   ; Keep one unified Start Menu folder across Core, Lite and Safe upgrades.
   RMDir /r "$SMPROGRAMS\Visionary Lite"
   CreateDirectory "$SMPROGRAMS\${INSTALL_FOLDER}"
-!ifdef LITE
-  CreateShortcut "$SMPROGRAMS\${INSTALL_FOLDER}\Visionary Lite Console.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\visionary.exe" status & echo. & echo Type visionary help for all commands."' "$INSTDIR\visionary.exe"
-!else
   CreateShortcut "$SMPROGRAMS\${INSTALL_FOLDER}\Visionary.lnk" "$INSTDIR\VisionaryUI.exe"
-!endif
   CreateShortcut "$SMPROGRAMS\${INSTALL_FOLDER}\${APP} Quick Scan.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\visionary.exe" scan quick --deep"' "$INSTDIR\visionary.exe"
   CreateShortcut "$SMPROGRAMS\${INSTALL_FOLDER}\Uninstall ${APP}.lnk" "$INSTDIR\uninstall.exe"
 SectionEnd
@@ -206,8 +184,13 @@ Section "Add the visionary command to PATH" SecPath
   SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=2000
 SectionEnd
 
-!ifndef LITE
+; In Lite edition, auto-starting the tray icon at sign-in is opt-in (/o) to
+; preserve zero extra background processes until the user opens the Web UI.
+!ifdef LITE
+Section /o "System tray icon at sign-in" SecTray
+!else
 Section "System tray icon at sign-in" SecTray
+!endif
   ; Starts VisionaryUI minimized to the taskbar notification area on Windows sign-in.
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "VisionaryTray" '"$INSTDIR\VisionaryUI.exe" --tray'
 SectionEnd
@@ -215,16 +198,15 @@ SectionEnd
 Section /o "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\Visionary.lnk" "$INSTDIR\VisionaryUI.exe"
 SectionEnd
-!endif
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
 !ifdef LITE
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "Full detection engine and CLI without dashboard (CPU-only local AI defaults)."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "Full detection engine, CLI and lightweight on-demand Web UI with CPU-only local AI defaults."
 !else
   !ifdef SAFE
-    !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "Low-friction AI scanner, CLI and dashboard (omits Defender-triggering heuristics and Defender setting changes)."
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "Low-friction AI scanner, CLI and Web UI (omits Defender-triggering heuristics and Defender setting changes)."
   !else
-    !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "Full AI scanner, heuristics, LOLBin guard, CLI and dashboard."
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} "Full AI scanner, heuristics, LOLBin guard, CLI and Web UI."
   !endif
 !endif
   !insertmacro MUI_DESCRIPTION_TEXT ${SecService} "A Windows service that keeps real-time protection running from startup."
@@ -232,10 +214,8 @@ SectionEnd
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDefender} "Lets Visionary and Microsoft Defender run side by side without scanning each other's data."
 !endif
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPath} "Use 'visionary' from any terminal immediately after installation."
-!ifndef LITE
   !insertmacro MUI_DESCRIPTION_TEXT ${SecTray} "Show the Visionary protection status icon in the Windows system tray automatically at sign-in."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A shortcut to the dashboard on the desktop."
-!endif
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A shortcut to the web dashboard on the desktop."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"

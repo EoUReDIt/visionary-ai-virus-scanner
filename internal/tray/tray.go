@@ -28,9 +28,25 @@ type Info struct {
 	Detail      string `json:"detail"`
 	Tooltip     string `json:"tooltip"`
 	Edition     string `json:"edition"`
+	Host        string `json:"host,omitempty"`
 	Protection  bool   `json:"protection"`
 	GameMode    bool   `json:"game_mode"`
 	Quarantined int    `json:"quarantined"`
+}
+
+// WithHost attaches the active local web UI host:port (e.g. 127.0.0.1:7878)
+// and includes it in the hover tooltip.
+func (i Info) WithHost(host string) Info {
+	i.Host = host
+	if host == "" {
+		return i
+	}
+	tip := i.Edition + " — " + i.Label + "\nhttp://" + host
+	if len(tip) > 124 {
+		tip = tip[:121] + "..."
+	}
+	i.Tooltip = tip
+	return i
 }
 
 // Callbacks wires tray user actions back into the dashboard host process.

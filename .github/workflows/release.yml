@@ -3,8 +3,8 @@ name: Release
 # Publishes three Visionary Windows editions to a GitHub Release:
 #   - Safe : Dashboard + CLI + AI triage + YARA + hashes + certs + baseline learning,
 #            WITHOUT Defender-triggering heuristic strings or Defender setting changes
-#   - Core : All features (Dashboard + CLI + full PE/script heuristics + LOLBin guard + Defender co-existence)
-#   - Lite : All detection features in a minimal CPU-only CLI build (no dashboard)
+#   - Core : All features (Web UI + CLI + full PE/script heuristics + LOLBin guard + Defender co-existence)
+#   - Lite : All detection features + on-demand lightweight Web UI with CPU-only local AI & low-RAM defaults
 #
 # Each edition ships as an NSIS Installer, Standalone Portable .exe, and Portable .zip + SHA256SUMS.txt.
 # Triggered on pushing a version tag (v0.2.0) or manually via Actions -> Release -> Run workflow.
@@ -147,7 +147,7 @@ jobs:
           $notes += "|---|---|---|---|---|---|"
           $notes += "| **Safe** | Yes | Yes | Yes | Omitted (lowest Windows Security friction) | Easiest download & install alongside Microsoft Defender |"
           $notes += "| **Core** | Yes | Yes | Yes | **All features enabled** | Full AI-powered real-time & LOLBin protection |"
-          $notes += "| **Lite** | CLI only | Yes (CPU-only default) | Yes | **All features enabled** | Gamers, low-RAM laptops & background service use |"
+          $notes += "| **Lite** | Yes (on-demand Web UI) | Yes (CPU-only default) | Yes | **All features enabled** | Gamers, low-RAM laptops & background service use |"
           $notes += ""
           if ($env:EDITION -eq 'all' -or $env:EDITION -eq 'safe') {
             $notes += "### 1. Safe Edition (Lowest Windows Security friction)"
@@ -174,14 +174,14 @@ jobs:
             $notes += ""
           }
           if ($env:EDITION -eq 'all' -or $env:EDITION -eq 'lite') {
-            $notes += "### 3. Lite Edition (All detection features — Low-Footprint CLI)"
-            $notes += "Carries the exact same full detection, heuristic, and behavioural engine as Core with no dashboard and CPU-only local AI defaults."
+            $notes += "### 3. Lite Edition (All detection features — Low-Footprint + On-Demand Web UI)"
+            $notes += "Carries the exact same full detection, heuristic, and behavioural engine as Core with low-RAM/CPU worker defaults, CPU-only local AI (auto-unloading), and an on-demand lightweight Web UI that uses zero RAM/CPU when closed."
             if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'nsis') {
               $notes += "- **``Visionary-Lite-Setup-$ver.exe``** — Windows NSIS Installer"
             }
             if ($env:PACKAGE_FORMAT -eq 'both' -or $env:PACKAGE_FORMAT -eq 'exe') {
-              $notes += "- **``visionary-lite-$ver-windows-amd64.zip``** — Portable ZIP (CLI)"
-              $notes += "- **``visionary-lite-$ver-windows-amd64.exe``** — Standalone executable"
+              $notes += "- **``visionary-lite-$ver-windows-amd64.zip``** — Portable ZIP (Web UI + CLI)"
+              $notes += "- **``VisionaryUI-Lite-$ver-windows-amd64.exe``** / **``visionary-lite-$ver-windows-amd64.exe``** — Standalone executables"
             }
             $notes += ""
           }

@@ -164,13 +164,17 @@ try {
     Remove-Item $sysoPath -Force -ErrorAction SilentlyContinue
     go vet -tags lite ./...
     Check "go vet (lite)"
-    go test -tags lite ./internal/config ./internal/ai ./internal/app
+    go test -tags lite ./...
     Check "go test (lite)"
 
     New-WinResource -InternalName "visionary-lite" -OriginalFilename "visionary-lite.exe" -FileDescription "Visionary Lite AI Antivirus CLI" -ProductName "Visionary Lite"
     go build -trimpath -tags lite -ldflags "-X $pkg.Version=$Version" -o dist\visionary-lite.exe .\cmd\visionary
     Check "build visionary-lite.exe"
-    $rawBinaries += "dist\visionary-lite.exe"
+
+    New-WinResource -InternalName "VisionaryUI-Lite" -OriginalFilename "VisionaryUI-Lite.exe" -FileDescription "Visionary Lite AI Protection Web Dashboard" -ProductName "Visionary Lite"
+    go build -trimpath -tags lite -ldflags "-H=windowsgui -X $pkg.Version=$Version" -o dist\VisionaryUI-Lite.exe .\cmd\visionary
+    Check "build VisionaryUI-Lite.exe"
+    $rawBinaries += "dist\visionary-lite.exe", "dist\VisionaryUI-Lite.exe"
   }
 
   if ($buildSafe) {
@@ -212,10 +216,12 @@ if ($PackageFormat -eq "both" -or $PackageFormat -eq "exe") {
   }
   if ($buildLite) {
     $lCli = "dist\visionary-lite-$Version-windows-amd64.exe"
+    $lUi  = "dist\VisionaryUI-Lite-$Version-windows-amd64.exe"
     $lZip = "dist\visionary-lite-$Version-windows-amd64.zip"
     Copy-Item dist\visionary-lite.exe $lCli -Force
-    New-PortableZip -ZipPath $lZip -SourceFiles @("dist\visionary-lite.exe", "README.md")
-    $releaseFiles += $lCli, $lZip
+    Copy-Item dist\VisionaryUI-Lite.exe $lUi -Force
+    New-PortableZip -ZipPath $lZip -SourceFiles @("dist\visionary-lite.exe", "dist\VisionaryUI-Lite.exe", "README.md")
+    $releaseFiles += $lCli, $lUi, $lZip
   }
   if ($buildSafe) {
     $sCli = "dist\visionary-safe-$Version-windows-amd64.exe"
