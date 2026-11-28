@@ -69,9 +69,36 @@ type LocalAI struct {
 	// CPUOnly keeps the model off the GPU (Ollama num_gpu=0, llama.cpp -ngl 0)
 	// and unloads it after KeepAlive of idleness, so a game or an old laptop
 	// never loses VRAM or RAM to the scanner.
-	CPUOnly   bool   `json:"cpu_only"`
+	// Deprecated alias of GPU == "off"; kept so old configs and callers work.
+	CPUOnly bool `json:"cpu_only"`
+	// GPU is off | auto | on. Empty means "follow CPUOnly" (see GPUMode).
+	// auto leaves the choice to the runtime; on offloads GPULayers layers when
+	// set. GPUVRAMMB caps the VRAM budget used by `visionary ai gpu` when it
+	// suggests a layer count (0 = 70% of the probed VRAM).
+	GPU       string `json:"gpu,omitempty"`
+	GPULayers int    `json:"gpu_layers,omitempty"`
+	GPUVRAMMB int    `json:"gpu_vram_mb,omitempty"`
 	Threads   int    `json:"threads"`              // 0 = half the cores
 	KeepAlive string `json:"keep_alive,omitempty"` // Ollama keep_alive, e.g. "2m"
+}
+
+// GPUMode resolves the effective GPU policy: an explicit GPU value wins, else
+// the legacy cpu_only flag (true = off), else auto.
+func (l LocalAI) GPUMode() string {
+	switch strings.ToLower(strings.TrimSpace(l.GPU)) {
+	case "off", "auto", "on":
+		return strings.ToLower(strings.TrimSpace(l.GPU))
+	}
+	if l.CPUOnly {
+		return "off"
+	}
+	return "auto"
+}
+
+// SetGPU stores a GPU policy and keeps the legacy cpu_only flag in step.
+func (l *LocalAI) SetGPU(mode string) {
+	l.GPU = mode
+	l.CPUOnly = mode == "off"
 }
 
 type CloudAI struct {
@@ -192,7 +219,7 @@ func ApplyLite(c *Config) {
 	c.Realtime.SkipExtensions = append([]string(nil), LiteSkipExtensions...)
 	c.Behavior.PollMS = 3000
 	c.GameMode.Auto = true
-	c.AI.Local.CPUOnly = true
+	c.AI.Local.SetGPU("off")
 	c.AI.Local.KeepAlive = "2m"
 	c.AI.Local.MaxParamsB = 2.0
 	if c.AI.Local.Model == "" || c.AI.Local.Model == "qwen3:1.7b" {

@@ -513,7 +513,14 @@ section.on{display:block}
         <div class="card">
           <div id="aLocal"></div>
           <div class="row">
-            <label class="chk"><input type="checkbox" id="aCpuOnly"> CPU-only local inference (keeps GPU VRAM free for games and creative apps)</label>
+            <label class="fld">Local inference hardware
+              <select id="aGpu" aria-label="Local inference hardware">
+                <option value="off">CPU only (keeps VRAM free for games)</option>
+                <option value="auto">Auto (runtime decides)</option>
+                <option value="on">Budget / full GPU (uses gpu_layers)</option>
+              </select>
+            </label>
+            <span class="muted">Run <code>visionary ai gpu</code> to detect your GPU and get a suggested <code>ai.local.gpu_layers</code>. Game mode always forces the CPU and unloads the model.</span>
           </div>
           <div class="row">
             <label class="fld">Auto-unload when idle
@@ -1347,7 +1354,7 @@ async function aiTab() {
   $("aSens").value = a.sensitivity || "balanced";
   $("aThr").value = (a.confidence_threshold || 0.80).toFixed(2);
   $("aShare").checked = !!a.cloud.share_snippets;
-  $("aCpuOnly").checked = !!a.local.cpu_only;
+  $("aGpu").value = a.local.gpu || (a.local.cpu_only ? "off" : "auto");
   $("aCli").textContent = "visionary ai mode " + a.mode + "  ·  visionary ai sensitivity " + (a.sensitivity || "balanced");
 
   const st = a.ai_stats || { triaged: 0, convicted: 0, cleared: 0, cache_hits: 0, errors: 0 };
@@ -1378,7 +1385,7 @@ async function aiTab() {
 
   /* Local runtime & models */
   const rawKA = (a.local.keep_alive || "").trim();
-  const effKA = rawKA === "0" ? "0s" : (rawKA || (a.local.cpu_only ? "2m" : "15m"));
+  const effKA = rawKA === "0" ? "0s" : (rawKA || ((a.local.gpu || (a.local.cpu_only ? "off" : "auto")) === "off" ? "2m" : "15m"));
   const kaSel = $("aKeepAlive");
   if (!Array.from(kaSel.options).some(o => o.value === effKA)) {
     kaSel.appendChild(el("option", { value: effKA }, "Custom (" + effKA + ")"));
@@ -1475,7 +1482,7 @@ $("bKeyClr").onclick = async e => {
   }
 };
 $("aShare").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.cloud.share_snippets", value: String(e.target.checked) }), "Saved");
-$("aCpuOnly").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.local.cpu_only", value: String(e.target.checked) }), "Local inference mode saved");
+$("aGpu").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.local.gpu", value: e.target.value }), "Local inference hardware saved");
 $("aKeepAlive").onchange = e => act(() => api("/api/settings", { action: "set", key: "ai.local.keep_alive", value: e.target.value }), e.target.value === "0s" ? "Model will unload right after each scan" : "Auto-unload timeout set to " + e.target.value);
 $("bUnload").onclick = e => act(() => api("/api/ai", { action: "unload" }), "Local model unloaded from memory", e.target);
 

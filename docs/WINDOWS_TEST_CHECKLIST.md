@@ -122,6 +122,14 @@ Legend: [ ] not run, PASS / FAIL / N/A.
 - [ ] `visionary profile lite` on the full edition applies the same settings; `profile balanced` leaves AI settings as they were.
 - [ ] Game mode still defers work with the lite settings; a full quick scan completes on a 2-core / 4 GB machine without freezing the desktop.
 
+## 15. Budget GPU (Lite and Core)
+
+- [ ] `visionary ai gpu` prints your GPU name and VRAM (a card with more than 4 GB may show "unknown or at least 4096 MB"; that is expected) and a suggested `gpu_layers`.
+- [ ] Lite default: `visionary settings show` has `ai.local.gpu` off; Task Manager > Performance > GPU shows no Visionary VRAM while scanning.
+- [ ] `visionary settings set ai.local.gpu on` then `visionary settings set ai.local.gpu_layers <suggested>`; run an AI-assisted scan and note GPU memory in Task Manager and the scan time versus CPU only. Send me both numbers.
+- [ ] Start a full-screen game (or `visionary game on`): the model unloads (VRAM drops) and later AI scans stay on the CPU.
+- [ ] Dashboard > AI: the hardware select shows CPU only / Auto / Budget GPU and matches the CLI value.
+
 ## Reporting
 For each FAIL record: Windows build, elevation, exact command, `visionary events --json` excerpt, and
 `%ProgramData%\VisionaryAV\*.log` if present. File issues with the label `windows-validation`.

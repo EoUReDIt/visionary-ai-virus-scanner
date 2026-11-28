@@ -116,6 +116,7 @@ func (a *App) load() error {
 	if triage.Enabled() {
 		eng.AI = triage.Assess
 	}
+	triage.SetForceCPU(a.GameMode)
 	TuneMemoryLimit(cfg.Profile)
 	a.mu.Lock()
 	oldTriage := a.triage
@@ -1059,7 +1060,26 @@ func (a *App) Set(key, value string) error {
 			}
 			c.AI.Local.MaxParamsB = f
 		case "ai.local.cpu_only":
-			return needBool(&c.AI.Local.CPUOnly)
+			var b bool
+			if err := needBool(&b); err != nil {
+				return err
+			}
+			if b {
+				c.AI.Local.SetGPU("off")
+			} else if c.AI.Local.GPUMode() == "off" {
+				c.AI.Local.SetGPU("auto")
+			}
+			return nil
+		case "ai.local.gpu":
+			m := strings.ToLower(strings.TrimSpace(value))
+			if m != "off" && m != "auto" && m != "on" {
+				return errors.New("ai.local.gpu must be off, auto or on")
+			}
+			c.AI.Local.SetGPU(m)
+		case "ai.local.gpu_layers":
+			return needInt(&c.AI.Local.GPULayers, 0, 999)
+		case "ai.local.gpu_vram_mb":
+			return needInt(&c.AI.Local.GPUVRAMMB, 0, 1<<20)
 		case "ai.local.threads":
 			return needInt(&c.AI.Local.Threads, 0, 256)
 		case "ai.local.keep_alive":

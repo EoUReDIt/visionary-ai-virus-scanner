@@ -175,6 +175,20 @@ func NewTriageWithSecrets(cfg *config.Config, secrets map[string]string) *Triage
 
 func (t *Triage) Enabled() bool { return t != nil && (t.Local != nil || t.Cloud != nil) }
 
+// SetForceCPU makes the local provider keep off the GPU while f() is true
+// (game mode). It affects requests made after the call.
+func (t *Triage) SetForceCPU(f func() bool) {
+	if t == nil {
+		return
+	}
+	switch l := t.Local.(type) {
+	case *Ollama:
+		l.ForceCPU = f
+	case *LlamaServer:
+		l.ForceCPU = f
+	}
+}
+
 // UnloadLocal stops any managed local inference child process (such as llama-server).
 func (t *Triage) UnloadLocal() {
 	if t == nil {

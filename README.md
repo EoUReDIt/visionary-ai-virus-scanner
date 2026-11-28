@@ -30,7 +30,7 @@ All three editions share one install directory (`%ProgramFiles%\Visionary`), one
 | Edition | Web UI & Tray | Detection Engine | Local (<3B) & Cloud AI | Threat & Risk Exchange | Best for |
 |---------|---------------|------------------|------------------------|------------------------|----------|
 | **Safe** | Yes | Hashes, YARA, Certs, Baseline Learning (omits Defender-triggering PE/script heuristic tables & Defender changes) | Yes | Yes | Lowest Windows Security / Defender friction |
-| **Lite** | On-demand Web UI (zero RAM/CPU when closed; tray opt-in) | Full detection + heuristics + LOLBin guard | Yes (CPU-only default, 2B ceiling, auto-unloads after idle) | Yes | Gamers, laptops, low-RAM PCs, background service |
+| **Lite** | On-demand Web UI (zero RAM/CPU when closed; tray opt-in) | Full detection + heuristics + LOLBin guard | Yes (CPU-only default, opt-in budget GPU via `ai.local.gpu`, 2B ceiling, auto-unloads after idle) | Yes | Gamers, laptops, low-RAM PCs, background service |
 | **Core** | Yes (with sign-in tray) | Full detection + heuristics + LOLBin guard + Defender coexistence | Yes (up to 3B local + cloud hybrid) | Yes | Full real-time AI & LOLBin protection |
 
 See [docs/LITE.md](docs/LITE.md) and [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md) for packaging and resource budgets.

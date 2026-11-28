@@ -24,6 +24,7 @@ import (
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/defs"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/edition"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/engine"
+	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/gpu"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/plat"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/risk"
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/secure"
@@ -688,6 +689,48 @@ type multiFlag []string
 func (m *multiFlag) String() string     { return strings.Join(*m, ", ") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
+// cmdAIGPU probes the GPU and suggests how many layers a budget card can take.
+func cmdAIGPU(ctx context.Context, a *app.App) {
+	cfg := a.Config()
+	gs := gpu.Probe(ctx, nil)
+	paramsB := cfg.AI.Local.MaxParamsB
+	if p, err := a.LocalModelParamsB(ctx); err == nil && p > 0 {
+		paramsB = p
+	}
+	modelMB := gpu.EstimateModelMB(paramsB)
+	var best *gpu.Info
+	suggest := 0
+	if len(gs) > 0 {
+		best = &gs[0]
+		suggest = gpu.SuggestLayers(best.VRAMMB, cfg.AI.Local.GPUVRAMMB, modelMB, 0)
+	}
+	if jsonOut {
+		emit(map[string]any{"adapters": gs, "gpu": cfg.AI.Local.GPUMode(), "gpu_layers": cfg.AI.Local.GPULayers,
+			"model_mb_estimate": modelMB, "suggested_layers": suggest})
+		return
+	}
+	fmt.Printf("policy      %s (ai.local.gpu)   layers: %d (0 = runtime decides)\n", bold(cfg.AI.Local.GPUMode()), cfg.AI.Local.GPULayers)
+	if best == nil {
+		fmt.Println("gpu         none found (no nvidia-smi, no Windows video controller)")
+		fmt.Println(dim("local AI stays on the CPU"))
+		return
+	}
+	for _, g := range gs {
+		mem := fmt.Sprintf("%d MB", g.VRAMMB)
+		if g.AtLeast {
+			mem = "unknown or at least 4096 MB (Windows reports 4 GB for larger cards)"
+		}
+		fmt.Printf("gpu         %s, %s  [%s]\n", g.Name, mem, g.Source)
+	}
+	fmt.Printf("model       about %d MB (%.1fB parameters, 4-bit)\n", modelMB, paramsB)
+	if suggest == 0 {
+		fmt.Println(dim("suggestion  keep ai.local.gpu off: not enough VRAM headroom"))
+		return
+	}
+	fmt.Printf("suggestion  visionary settings set ai.local.gpu on && visionary settings set ai.local.gpu_layers %d\n", suggest)
+	fmt.Println(dim("            uses at most 70% of VRAM (cap with ai.local.gpu_vram_mb); game mode forces the CPU and unloads the model"))
+}
+
 func cmdAI(a *app.App, fs *flag.FlagSet, rest []string) {
 	server := fs.String("server", "", "path to llama-server(.exe) for GGUF models")
 	noUse := fs.Bool("no-use", false, "download or import without selecting the model")
@@ -722,6 +765,8 @@ func cmdAI(a *app.App, fs *flag.FlagSet, rest []string) {
 		}
 		fmt.Printf("cloud       %s / %s, %s, sends %s\n", prov, cfg.AI.Cloud.Model, key, share)
 		fmt.Println(dim("hybrid = local model first, cloud only when the local model is unsure"))
+	case "gpu":
+		cmdAIGPU(ctx, a)
 	case "mode":
 		check(a.SetAIMode(need(pos, 1, "off, local, cloud or hybrid")))
 		ok("AI mode: %s", pos[1])
@@ -1090,7 +1135,7 @@ func cmdSettings(a *app.App, fs *flag.FlagSet, rest []string) {
 				"risk.enabled", "risk.provider", "risk.endpoint", "risk.kev_only", "risk.min_severity", "risk.auto_prioritize",
 				"ai.sensitivity", "ai.confidence_threshold", "ai.cloud.provider", "ai.cloud.endpoint",
 				"ai.cloud.share_snippets", "ai.cloud.model", "ai.cloud.effort", "ai.local.endpoint", "ai.local.provider",
-				"ai.local.server_path", "ai.local.max_params_b", "ai.local.cpu_only", "ai.local.threads",
+				"ai.local.server_path", "ai.local.max_params_b", "ai.local.cpu_only", "ai.local.gpu", "ai.local.gpu_layers", "ai.local.gpu_vram_mb", "ai.local.threads",
 				"ai.local.keep_alive", "realtime.workers", "realtime.settle_ms", "realtime.cpu_percent", "realtime.backoff_s", "realtime.watch_paths", "realtime.skip_extensions", "behavior.poll_ms", "ui.port"}
 			sort.Strings(keys)
 			fmt.Println(dim("\nsettable with `visionary settings set <key> <value>`:\n  " + strings.Join(keys, "\n  ")))

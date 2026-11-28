@@ -16,3 +16,34 @@ func TestApplyLite(t *testing.T) {
 		t.Errorf("full defaults changed: %+v", d)
 	}
 }
+
+func TestGPUModeMigration(t *testing.T) {
+	cases := []struct {
+		in   LocalAI
+		want string
+	}{
+		{LocalAI{}, "auto"},                       // old Core config, no setting
+		{LocalAI{CPUOnly: true}, "off"},           // old Lite config: cpu_only maps to off
+		{LocalAI{GPU: "on", CPUOnly: true}, "on"}, // explicit value wins
+		{LocalAI{GPU: "bogus"}, "auto"},
+	}
+	for _, c := range cases {
+		if got := c.in.GPUMode(); got != c.want {
+			t.Errorf("%+v: got %s want %s", c.in, got, c.want)
+		}
+	}
+	var l LocalAI
+	l.SetGPU("off")
+	if !l.CPUOnly {
+		t.Error("SetGPU(off) must keep the cpu_only alias true")
+	}
+	l.SetGPU("auto")
+	if l.CPUOnly {
+		t.Error("SetGPU(auto) must clear cpu_only")
+	}
+	c := defaults()
+	ApplyLite(c)
+	if c.AI.Local.GPUMode() != "off" {
+		t.Errorf("Lite must default to gpu=off, got %s", c.AI.Local.GPUMode())
+	}
+}
