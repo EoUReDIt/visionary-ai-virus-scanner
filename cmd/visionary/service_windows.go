@@ -39,22 +39,33 @@ func (g *guardService) Execute(_ []string, req <-chan svc.ChangeRequest, status 
 		close(done)
 	}()
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
-	for c := range req {
-		switch c.Cmd {
-		case svc.Interrogate:
-			status <- c.CurrentStatus
-		case svc.Stop, svc.Shutdown:
+	for {
+		select {
+		case <-done:
+			// The guard ended by itself (a quit request): stop the service
+			// too, or it would sit running with nothing to do.
 			status <- svc.Status{State: svc.StopPending}
 			cancel()
-			select {
-			case <-done:
-			case <-time.After(10 * time.Second):
-			}
 			return false, 0
+		case c, ok := <-req:
+			if !ok {
+				cancel()
+				return false, 0
+			}
+			switch c.Cmd {
+			case svc.Interrogate:
+				status <- c.CurrentStatus
+			case svc.Stop, svc.Shutdown:
+				status <- svc.Status{State: svc.StopPending}
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+				}
+				return false, 0
+			}
 		}
 	}
-	cancel()
-	return false, 0
 }
 
 func runService(a *app.App) error { return svc.Run(serviceName, &guardService{a}) }

@@ -205,4 +205,3 @@ func TestInternetDBStrictPrivateIPGuard(t *testing.T) {
 		t.Fatalf("expected cached second lookup with 1 total HTTP hit: cached=%v hits=%d err=%v", exp2.Cached, hits.Load(), err)
 	}
 }
-

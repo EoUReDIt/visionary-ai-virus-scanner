@@ -86,6 +86,7 @@ const (
 	cmdResume    = 1005
 	cmdGameMode  = 1006
 	cmdQuit      = 1007
+	cmdQuitAll   = 1008
 )
 
 type wndClassExW struct {
@@ -456,6 +457,9 @@ func (c *Controller) showContextMenu(hwnd uintptr) {
 	}
 	appendMenuItem(hMenu, gmFlags, cmdGameMode, "Game Mode")
 	appendMenuItem(hMenu, mfSeparator, 0, "")
+	if c.cb.OnQuitAll != nil {
+		appendMenuItem(hMenu, mfString, cmdQuitAll, "Quit Visionary completely")
+	}
 	appendMenuItem(hMenu, mfString, cmdQuit, "Quit Visionary Tray")
 
 	// Make "Open Visionary Dashboard" bold as the default double-click action.
@@ -515,6 +519,10 @@ func (c *Controller) showContextMenu(hwnd uintptr) {
 				_ = c.cb.OnToggleGameMode()
 				c.Refresh()
 			}()
+		}
+	case cmdQuitAll:
+		if c.cb.OnQuitAll != nil {
+			go c.cb.OnQuitAll()
 		}
 	case cmdQuit:
 		if c.cb.OnQuit != nil {

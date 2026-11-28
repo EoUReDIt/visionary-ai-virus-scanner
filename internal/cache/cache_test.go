@@ -103,9 +103,11 @@ func (d *stubDriver) Open(string) (driver.Conn, error) { return &stubConn{d: d},
 
 type stubConn struct{ d *stubDriver }
 
-func (c *stubConn) Prepare(query string) (driver.Stmt, error) { return &stubStmt{d: c.d, q: query}, nil }
-func (c *stubConn) Close() error                              { return nil }
-func (c *stubConn) Begin() (driver.Tx, error)                 { return &stubTx{}, nil }
+func (c *stubConn) Prepare(query string) (driver.Stmt, error) {
+	return &stubStmt{d: c.d, q: query}, nil
+}
+func (c *stubConn) Close() error              { return nil }
+func (c *stubConn) Begin() (driver.Tx, error) { return &stubTx{}, nil }
 func (c *stubConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
 	c.d.mu.Lock()
 	c.d.queries = append(c.d.queries, query)
@@ -135,8 +137,8 @@ func (s *stubStmt) Query(_ []driver.Value) (driver.Rows, error) { return &emptyR
 
 type emptyRows struct{}
 
-func (r *emptyRows) Columns() []string         { return []string{"v"} }
-func (r *emptyRows) Close() error              { return nil }
+func (r *emptyRows) Columns() []string           { return []string{"v"} }
+func (r *emptyRows) Close() error                { return nil }
 func (r *emptyRows) Next(_ []driver.Value) error { return io.EOF }
 
 func TestSQLStorePragmasAndSchema(t *testing.T) {

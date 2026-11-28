@@ -39,6 +39,7 @@ const usage = `Visionary — antivirus with local and cloud AI
   visionary guard                          real-time protection in this terminal
   visionary ui                             open the dashboard
 
+  visionary quit                           stop Visionary completely: service, dashboard, tray, guard, AI helpers
   visionary protection status|enable
   visionary protection disable --for 15m|1h|restart|permanent
   visionary gamemode on|off|auto
@@ -312,6 +313,9 @@ func main() {
 		cmdWindows(a, fs, rest)
 	case "preboot":
 		cmdPreboot(a, fs, rest)
+	case "quit", "exit":
+		parse(fs, rest)
+		cmdQuit(a)
 	case "service":
 		pos := parse(fs, rest)
 		msg, err := serviceCommand(need(pos, 0, "install, uninstall, start, stop or status"))
@@ -1343,4 +1347,30 @@ func cmdRisk(a *app.App, fs *flag.FlagSet, rest []string) {
 	default:
 		fail(errors.New("usage: visionary risk status|sync|guidance|search <query> [--kev] [--severity CRITICAL|HIGH]|ip <public-ipv4>|provider [nvd|cisa-kev|custom]|set-key|clear-key"))
 	}
+}
+
+// cmdQuit stops every Visionary process on this computer and says what is
+// still running, if anything. It does not uninstall or disable start-up:
+// signing in or rebooting starts protection again.
+func cmdQuit(a *app.App) {
+	pw := ""
+	if a.Config().Security.RequirePasswordToDisable {
+		var err error
+		pw, err = secure.PromptPassword("Computer password for " + secure.CurrentUser() + ": ")
+		check(err)
+	}
+	check(a.Quit(pw))
+	// Stopping the service directly is quicker, but needs administrator
+	// rights; without them the service still exits on the shared request.
+	if _, err := serviceCommand("stop"); err == nil {
+		fmt.Println(dim("service stopped"))
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for app.GuardAlive() && time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+	}
+	if app.GuardAlive() {
+		fail(errors.New("a guard is still running; if it is the service, run this as administrator"))
+	}
+	ok("%s", "Visionary has quit"+dim("  — start it again with: visionary ui   (or sign in again / restart)"))
 }

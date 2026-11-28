@@ -72,6 +72,7 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 	defer func() {
 		a.FlushReputation()
 		a.Engine().Flush()
+		a.Triage().UnloadLocal() // stop any local AI server this guard started
 	}()
 
 	var (
@@ -164,6 +165,10 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 			// changed the profile or imported definitions.
 			if now.Sub(lastCfg) >= 2*time.Second {
 				lastCfg = now
+				if QuitRequested() {
+					say("quit requested, stopping")
+					return nil
+				}
 				if a.Reload() {
 					a.setReputationDebounce(5 * time.Second)
 					say("settings or definitions changed, reloaded")

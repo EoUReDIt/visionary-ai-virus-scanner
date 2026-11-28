@@ -56,6 +56,7 @@ See [docs/LITE.md](docs/LITE.md) and [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md
 | 13 | Pause / resume protection | `visionary protection disable --for 15m\|1h\|restart\|permanent`, `enable` |
 | 14 | Gamer / Dev / Lite profiles & Game Mode | `visionary profile balanced\|gamer\|dev\|lite`, `visionary gamemode auto\|on\|off` |
 | 15 | Password-gated settings reset | `visionary settings reset [--all]` |
+| 16 | Quit completely (service, dashboard, tray, guard, local AI) until next start | `visionary quit`, or tray → *Quit Visionary completely* |
 
 Run `visionary help` for the complete command reference. Exit codes: `0` clean, `1` malicious, `2` suspicious, `3` error. Most commands accept `--json` for scripting.
 
