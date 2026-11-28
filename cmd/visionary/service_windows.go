@@ -31,6 +31,7 @@ func (g *guardService) Execute(_ []string, req <-chan svc.ChangeRequest, status 
 	// Ensure logged-in user sessions (VisionaryUI) can update config.json and
 	// manage quarantine/definitions alongside this LocalSystem service.
 	_ = plat.EnsureSharedDataDir(config.Dir())
+	_, _ = g.a.CapGuardCPU()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

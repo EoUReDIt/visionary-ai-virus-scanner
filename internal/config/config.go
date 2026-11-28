@@ -44,6 +44,27 @@ type Realtime struct {
 	SkipExtensions []string `json:"skip_extensions"`
 	BackoffS       int      `json:"backoff_s"`   // rescan backoff base in seconds; 0 = 5 (then x3, x12)
 	CPUPercent     int      `json:"cpu_percent"` // duty-cycle cap per scan worker, 1-100; 0 = off
+	// CPUCapPercent is an operating-system limit on the whole guard process
+	// and the helpers it starts (such as a local AI server), as a share of all
+	// CPU cores. 0 = the profile default (10 for Lite, none otherwise),
+	// negative = off.
+	CPUCapPercent int `json:"cpu_cap_percent"`
+}
+
+// LiteCPUCap is the Lite guard's default CPU ceiling, in percent of the machine.
+const LiteCPUCap = 10
+
+// GuardCPUCap resolves the effective guard CPU ceiling (0 = none).
+func (c *Config) GuardCPUCap() int {
+	switch {
+	case c.Realtime.CPUCapPercent < 0:
+		return 0
+	case c.Realtime.CPUCapPercent > 0:
+		return min(c.Realtime.CPUCapPercent, 100)
+	case c.Profile == "lite":
+		return LiteCPUCap
+	}
+	return 0
 }
 
 // LiteSkipExtensions is the data-file list the Lite preset starts with.

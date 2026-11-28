@@ -293,6 +293,42 @@ func SetBackgroundPriority(on bool) {
 	_ = windows.SetPriorityClass(windows.CurrentProcess(), mode)
 }
 
+// CapProcessCPU puts this process, and every process it starts afterwards,
+// in a job object with a hard CPU limit of percent of the whole machine. The
+// operating system enforces it, so it holds whatever the cause of a CPU spike
+// (a scan loop, a local AI server, a misbehaving watcher). Windows 8+.
+func CapProcessCPU(percent int) error {
+	if percent <= 0 || percent >= 100 {
+		return nil
+	}
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return err
+	}
+	// JOBOBJECT_CPU_RATE_CONTROL_INFORMATION: ControlFlags, then CpuRate in
+	// 1/100ths of a percent. ENABLE | HARD_CAP.
+	info := struct{ ControlFlags, CpuRate uint32 }{0x1 | 0x4, uint32(percent) * 100}
+	if _, err := windows.SetInformationJobObject(job, windows.JobObjectCpuRateControlInformation,
+		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		windows.CloseHandle(job)
+		return err
+	}
+	if err := windows.AssignProcessToJobObject(job, windows.CurrentProcess()); err != nil {
+		windows.CloseHandle(job)
+		return err
+	}
+	return nil // the handle stays open for the life of the process
+}
+
+// ProcessCPUTime is the user plus kernel CPU time this process has used.
+func ProcessCPUTime() time.Duration {
+	var c, e, k, u windows.Filetime
+	if windows.GetProcessTimes(windows.CurrentProcess(), &c, &e, &k, &u) != nil {
+		return 0
+	}
+	return time.Duration(k.Nanoseconds() + u.Nanoseconds())
+}
+
 func schtasks(args ...string) error {
 	out, err := exec.Command("schtasks.exe", args...).CombinedOutput()
 	if err != nil {
