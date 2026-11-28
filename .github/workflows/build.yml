@@ -35,6 +35,10 @@ jobs:
         run: |
           go build -tags lite -o visionary-lite ./cmd/visionary
           sh scripts/idle-budget.sh ./visionary-lite 40 3
+      - name: Quit mode stops the guard
+        run: |
+          go build -tags lite -o visionary-lite ./cmd/visionary
+          sh scripts/quit-smoke.sh ./visionary-lite
       - name: Hot-file guard budget (busy 20 MB file)
         run: |
           go build -o visionary-core ./cmd/visionary
@@ -103,6 +107,16 @@ jobs:
           Write-Host "lite guard idle working set: $mb MB, cpu seconds: $($p.TotalProcessorTime.TotalSeconds)"
           Stop-Process $p -Force
           if ($mb -gt 100) { throw "idle working set $mb MB exceeds the 100 MB budget" }
+      - name: Quit mode stops the guard (Windows)
+        shell: pwsh
+        run: |
+          $env:VISIONARY_HOME = "$env:RUNNER_TEMP\vhome-quit"
+          $p = Start-Process .\dist\visionary-lite.exe -ArgumentList "guard" -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { throw "guard did not start" }
+          .\dist\visionary-lite.exe quit
+          if (-not $p.WaitForExit(15000)) { Stop-Process $p -Force; throw "guard still running 15s after quit" }
+          Write-Host "guard exited after quit"
       - name: Signing pipeline self-test (throwaway certificate)
         shell: pwsh
         run: |
