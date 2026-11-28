@@ -2,7 +2,7 @@
 // hash lookups, Shodan InternetDB public IP exposure lookups, and Risk Exchange
 // vulnerability advisories.
 //
-// When built with `-tags sqlite` (after `go get modernc.org/sqlite`), Open
+// When built with `-tags sqlite` (the dependency is already in go.mod), Open
 // automatically uses an embedded WAL-mode SQLite database (`visionary_cache.db`)
 // via Go's standard database/sql package. In zero-extra-dependency builds, Open
 // falls back seamlessly to a transactional atomic JSON store (`visionary_cache.json`)
