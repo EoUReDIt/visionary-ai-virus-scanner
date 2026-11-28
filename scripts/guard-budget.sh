@@ -13,7 +13,14 @@ export VISIONARY_HOME="$HOME_DIR"
 head -c 20971520 /dev/urandom > "$WATCH/busy.dat"
 "$BIN" guard >/dev/null 2>&1 &
 PID=$!
-trap 'kill $PID 2>/dev/null || true; rm -rf "$HOME_DIR" "$WATCH"' EXIT
+# Stop the guard and wait for it before removing its data dir, otherwise it can
+# still be writing (behavior/) and rm fails; cleanup must never change the result.
+cleanup() {
+  kill "$PID" 2>/dev/null || true
+  wait "$PID" 2>/dev/null || true
+  rm -rf "$HOME_DIR" "$WATCH" 2>/dev/null || rm -rf "$HOME_DIR" "$WATCH" 2>/dev/null || true
+}
+trap cleanup EXIT
 sleep 4
 ticks() { awk '{print $14+$15}' /proc/$PID/stat; }
 T0=$(ticks); S0=$(date +%s.%N)
