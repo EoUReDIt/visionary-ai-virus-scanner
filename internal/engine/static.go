@@ -3,6 +3,7 @@ package engine
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"debug/pe"
@@ -381,11 +382,14 @@ const (
 
 // scanZip scans archive members in memory. The limits exist so a crafted
 // archive cannot exhaust memory or time (decompression bombs are reported).
-func (e *Engine) scanZip(data []byte, depth int, res *Result) {
-	e.scanZipReader(bytes.NewReader(data), int64(len(data)), depth, res)
+func (e *Engine) scanZip(ctx context.Context, data []byte, depth int, res *Result) {
+	e.scanZipReader(ctx, bytes.NewReader(data), int64(len(data)), depth, res)
 }
 
-func (e *Engine) scanZipReader(r io.ReaderAt, size int64, depth int, res *Result) {
+func (e *Engine) scanZipReader(ctx context.Context, r io.ReaderAt, size int64, depth int, res *Result) {
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
 	zr, err := zip.NewReader(r, size)
 	if err != nil {
 		return
@@ -394,6 +398,9 @@ func (e *Engine) scanZipReader(r io.ReaderAt, size int64, depth int, res *Result
 	var total uint64
 	bomb := false
 	for i, zf := range zr.File {
+		if ctx != nil && ctx.Err() != nil {
+			return
+		}
 		if i >= zipMaxEntries || total > zipBudget {
 			res.add(Finding{"archive", "archive-truncated", 0, "archive too large to scan completely"})
 			break
@@ -417,9 +424,15 @@ func (e *Engine) scanZipReader(r io.ReaderAt, size int64, depth int, res *Result
 		if err != nil || len(member) > zipMaxMember {
 			continue
 		}
+		if ctx != nil && ctx.Err() != nil {
+			return
+		}
 		total += uint64(len(member))
 		sub := &Result{Path: zf.Name}
-		e.analyze(member, zf.Name, sub, depth+1, false)
+		e.analyze(ctx, member, zf.Name, sub, depth+1, false)
+		if ctx != nil && ctx.Err() != nil {
+			return
+		}
 		for _, f := range sub.Findings {
 			f.Detail = strings.TrimSpace("in " + zf.Name + ": " + f.Detail)
 			res.add(f)

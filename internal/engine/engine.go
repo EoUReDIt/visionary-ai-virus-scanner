@@ -11,6 +11,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/sha1"
@@ -213,6 +214,12 @@ type SecondOpinion interface {
 	VerifyTrust(path string) (trusted bool, err error)
 }
 
+// ContextSecondOpinion is an optional extension of SecondOpinion that honours
+// context cancellation when spawning external scanners such as MpCmdRun.
+type ContextSecondOpinion interface {
+	ScanFileContext(ctx context.Context, path string) (threat string, found bool, err error)
+}
+
 // Reputation is a hash-only cloud lookup.
 type Reputation interface {
 	Lookup(ctx context.Context, sha256 string) (malicious, total int, label string, found bool, err error)
@@ -297,17 +304,12 @@ func (e *Engine) Flush() {
 		return
 	}
 	e.evictCacheLocked(e.DB.Manifest.Revision)
-	f, err := os.Create(cachePath() + ".tmp")
-	if err != nil {
-		return
-	}
-	err = gob.NewEncoder(f).Encode(struct {
+	var buf bytes.Buffer
+	err := gob.NewEncoder(&buf).Encode(struct {
 		Version int
 		Entries map[string]cacheEntry
 	}{cacheVersion, e.cache})
-	f.Close()
-	if err == nil {
-		_ = os.Rename(cachePath()+".tmp", cachePath())
+	if err == nil && config.WriteAtomic(cachePath(), buf.Bytes(), 0o644) == nil {
 		e.dirty = false
 	}
 }
@@ -421,9 +423,17 @@ func (e *Engine) ownFile(path string) bool {
 
 // ScanFile runs the full pipeline on one file.
 func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	start := time.Now()
 	res := &Result{Path: path, Verdict: Clean}
 	defer func() { res.DurationMs = time.Since(start).Milliseconds() }()
+
+	if ctx.Err() != nil {
+		res.Verdict = Skipped
+		return res
+	}
 
 	st, err := os.Lstat(path)
 	if err != nil {
@@ -470,6 +480,10 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 	bufp := streamBufPool.Get().(*[]byte)
 	buf := *bufp
 	for {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			break
+		}
 		n, rerr := f.Read(buf)
 		if n > 0 {
 			_, _ = hashes.Write(buf[:n])
@@ -492,6 +506,10 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 	streamBufPool.Put(bufp)
 	if err != nil {
 		f.Close()
+		if ctx.Err() != nil {
+			res.Verdict = Skipped
+			return res
+		}
 		res.Verdict, res.Error = Failed, err.Error()
 		return res
 	}
@@ -508,6 +526,11 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 		res.Verdict, res.Action = Skipped, "allowlisted"
 		return res
 	}
+	if ctx.Err() != nil {
+		f.Close()
+		res.Verdict = Skipped
+		return res
+	}
 	if name, src, ok := e.DB.LookupHash(dm, d1, d2); ok {
 		res.add(Finding{"hash", name, 100, "known sample (definitions: " + src + ")"})
 	}
@@ -519,8 +542,15 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 	if res.Size > headLimit {
 		readerAt = f
 	}
-	e.analyzeWithReader(data, readerAt, res.Size, maxScan, filepath.Base(path), res, 0, true)
+	e.analyzeWithReader(ctx, data, readerAt, res.Size, maxScan, filepath.Base(path), res, 0, true)
 	f.Close()
+	if ctx.Err() != nil {
+		res.Verdict = Skipped
+		res.Findings = nil
+		res.Score = 0
+		res.Threat = ""
+		return res
+	}
 	for _, c := range opt.Context {
 		res.add(c)
 	}
@@ -539,7 +569,7 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 	// String extraction is the slowest step and only matters as evidence
 	// for a person or a model, so it runs only when there is something to
 	// explain.
-	if res.Score > 0 || opt.Describe {
+	if (res.Score > 0 || opt.Describe) && ctx.Err() == nil {
 		res.Features.Strings = interestingStrings(data, 40)
 	}
 	// Release the file content buffer before slow external/network escalations
@@ -550,6 +580,10 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 	}
 	data = nil
 
+	if ctx.Err() != nil {
+		res.Verdict = Skipped
+		return res
+	}
 	if res.Score > 0 && res.Features.PE != nil && res.Features.PE.HasSignature && e.Defender != nil {
 		if ok, err := e.Defender.VerifyTrust(path); err == nil && ok {
 			res.Trusted = true
@@ -565,6 +599,11 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 		e.escalate(ctx, path, amsiData, res, opt.Process, opt.NoCache)
 	}
 	amsiData = nil
+
+	if ctx.Err() != nil {
+		res.Verdict = Skipped
+		return res
+	}
 
 	switch res.Verdict {
 	case Clean:
@@ -592,22 +631,28 @@ func (e *Engine) ScanFile(ctx context.Context, path string, opt Options) *Result
 }
 
 // analyze runs the content layers on an in-memory buffer (such as an archive member).
-func (e *Engine) analyze(data []byte, name string, res *Result, depth int, top bool) {
-	e.analyzeWithReader(data, nil, int64(len(data)), e.maxBytes(), name, res, depth, top)
+func (e *Engine) analyze(ctx context.Context, data []byte, name string, res *Result, depth int, top bool) {
+	e.analyzeWithReader(ctx, data, nil, int64(len(data)), e.maxBytes(), name, res, depth, top)
 }
 
-func (e *Engine) analyzeWithReader(data []byte, r io.ReaderAt, totalSize, maxZipSize int64, name string, res *Result, depth int, top bool) {
+func (e *Engine) analyzeWithReader(ctx context.Context, data []byte, r io.ReaderAt, totalSize, maxZipSize int64, name string, res *Result, depth int, top bool) {
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
 	typ := detectType(data, name)
 	if top {
 		res.Features.Type = typ
 		res.Features.Entropy = entropy(data)
 	}
-	for _, m := range e.DB.Rules.Scan(data) {
+	for _, m := range e.DB.Rules.ScanContext(ctx, data) {
 		detail := m.Description
 		if m.Source != "builtin" {
 			detail = strings.TrimSpace(detail + " [" + m.Source + "]")
 		}
 		res.add(Finding{"rule", m.Rule, m.Score, detail})
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return
 	}
 	for _, f := range nameHeuristics(name, typ) {
 		res.add(f)
@@ -648,9 +693,9 @@ func (e *Engine) analyzeWithReader(data []byte, r io.ReaderAt, totalSize, maxZip
 	case "zip":
 		if e.Cfg.Scan.ScanArchives && depth < zipMaxDepth {
 			if r != nil && totalSize <= maxZipSize {
-				e.scanZipReader(r, totalSize, depth, res)
+				e.scanZipReader(ctx, r, totalSize, depth, res)
 			} else if r == nil {
-				e.scanZip(data, depth, res)
+				e.scanZip(ctx, data, depth, res)
 			}
 		}
 	}
@@ -659,6 +704,9 @@ func (e *Engine) analyzeWithReader(data []byte, r io.ReaderAt, totalSize, maxZip
 // escalate asks the slower layers about a gray-zone file, stopping as soon
 // as one of them settles it.
 func (e *Engine) escalate(ctx context.Context, path string, data []byte, res *Result, proc *ProcessContext, noCache bool) {
+	if ctx.Err() != nil {
+		return
+	}
 	gaming := e.GameMode != nil && e.GameMode()
 
 	if e.Defender != nil && e.Cfg.Windows.DefenderSecondOpinion {
@@ -667,8 +715,15 @@ func (e *Engine) escalate(ctx context.Context, path string, data []byte, res *Re
 			found, _ = e.Defender.ScanBuffer(data, filepath.Base(path))
 			name = "AMSI"
 		}
-		if !found && !gaming {
-			name, found, _ = e.Defender.ScanFile(path)
+		if !found && !gaming && ctx.Err() == nil {
+			if cso, ok := e.Defender.(ContextSecondOpinion); ok {
+				name, found, _ = cso.ScanFileContext(ctx, path)
+			} else {
+				name, found, _ = e.Defender.ScanFile(path)
+			}
+		}
+		if ctx.Err() != nil {
+			return
 		}
 		if found {
 			res.add(Finding{"defender", "Defender:" + name, 95, "Microsoft Defender also flags this file"})
@@ -678,6 +733,9 @@ func (e *Engine) escalate(ctx context.Context, path string, data []byte, res *Re
 	}
 	// Release AMSI script buffer before network-bound Threat Exchange / AI calls.
 	data = nil
+	if ctx.Err() != nil {
+		return
+	}
 
 	if e.Rep != nil && e.Cfg.Reputation.Enabled() && !gaming {
 		var (
@@ -893,40 +951,54 @@ func (e *Engine) ScanPaths(ctx context.Context, paths []string, opt Options, pro
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for p := range files {
-				r := e.ScanFile(ctx, p, opt)
-				mu.Lock()
-				sum.Files++
-				sum.Bytes += r.Size
-				switch r.Verdict {
-				case Clean:
-					sum.Clean++
-				case Suspicious:
-					sum.Suspicious++
-					sum.Detections = append(sum.Detections, r)
-				case Malicious:
-					sum.Malicious++
-					sum.Detections = append(sum.Detections, r)
-					if strings.HasPrefix(r.Action, "quarantined") {
-						sum.Quarantined++
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case p, ok := <-files:
+					if !ok || ctx.Err() != nil {
+						return
 					}
-				case Skipped:
-					sum.Skipped++
-				case Failed:
-					sum.Errors++
+					r := e.ScanFile(ctx, p, opt)
+					if ctx.Err() != nil {
+						return
+					}
+					mu.Lock()
+					sum.Files++
+					sum.Bytes += r.Size
+					switch r.Verdict {
+					case Clean:
+						sum.Clean++
+					case Suspicious:
+						sum.Suspicious++
+						sum.Detections = append(sum.Detections, r)
+					case Malicious:
+						sum.Malicious++
+						sum.Detections = append(sum.Detections, r)
+						if strings.HasPrefix(r.Action, "quarantined") {
+							sum.Quarantined++
+						}
+					case Skipped:
+						sum.Skipped++
+					case Failed:
+						sum.Errors++
+					}
+					if r.Cached {
+						sum.Cached++
+					}
+					if progress != nil {
+						progress(r)
+					}
+					mu.Unlock()
 				}
-				if r.Cached {
-					sum.Cached++
-				}
-				if progress != nil {
-					progress(r)
-				}
-				mu.Unlock()
 			}
 		}()
 	}
 	seen := map[string]bool{}
 	send := func(p string) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		k := pathKey(p)
 		if seen[k] {
 			return true
@@ -941,6 +1013,9 @@ func (e *Engine) ScanPaths(ctx context.Context, paths []string, opt Options, pro
 	}
 walk:
 	for _, root := range paths {
+		if ctx.Err() != nil {
+			break
+		}
 		st, err := os.Stat(root)
 		if err != nil {
 			mu.Lock()

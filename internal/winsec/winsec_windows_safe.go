@@ -3,6 +3,7 @@
 package winsec
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -62,14 +64,31 @@ func mpCmdRun() string {
 }
 
 // ScanFile runs a read-only Defender custom scan on one file without remediation.
-func (*Defender) ScanFile(path string) (string, bool, error) {
+func (d *Defender) ScanFile(path string) (string, bool, error) {
+	return d.ScanFileContext(context.Background(), path)
+}
+
+// ScanFileContext runs MpCmdRun.exe bound to ctx (capped at 30s) so cancelling
+// an active scan terminates the child process promptly.
+func (*Defender) ScanFileContext(ctx context.Context, path string) (string, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return "", false, ctx.Err()
+	}
 	exe := mpCmdRun()
 	if exe == "" {
 		return "", false, errors.New("MpCmdRun.exe not found")
 	}
-	cmd := exec.Command(exe, "-Scan", "-ScanType", "3", "-File", path, "-DisableRemediation")
+	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(scanCtx, exe, "-Scan", "-ScanType", "3", "-File", path, "-DisableRemediation")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.CombinedOutput()
+	if scanCtx.Err() != nil {
+		return "", false, scanCtx.Err()
+	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) && ee.ExitCode() == 2 {
 		name := "threat"

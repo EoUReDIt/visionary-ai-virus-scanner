@@ -2,7 +2,10 @@
 
 package winsec
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 var errWindows = errors.New("Windows Security integration is only available on Windows")
 
@@ -22,6 +25,9 @@ type Defender struct{}
 
 func New() *Defender { return nil }
 
-func (*Defender) ScanFile(string) (string, bool, error)   { return "", false, errWindows }
+func (*Defender) ScanFile(string) (string, bool, error) { return "", false, errWindows }
+func (*Defender) ScanFileContext(context.Context, string) (string, bool, error) {
+	return "", false, errWindows
+}
 func (*Defender) ScanBuffer([]byte, string) (bool, error) { return false, errWindows }
 func (*Defender) VerifyTrust(string) (bool, error)        { return false, errWindows }

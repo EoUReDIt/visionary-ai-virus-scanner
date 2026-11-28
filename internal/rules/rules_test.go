@@ -1,6 +1,11 @@
 package rules
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"testing"
+	"time"
+)
 
 const src = `
 import "pe"
@@ -63,5 +68,50 @@ func TestParseAndScan(t *testing.T) {
 		if r.Name == "Text_And_Hex" && r.Score != 90 || r.Name == "Regex" && r.Score != 30 {
 			t.Errorf("%s score = %d", r.Name, r.Score)
 		}
+	}
+}
+
+func TestScanContextCancelledReturnsNil(t *testing.T) {
+	set := Parse(`rule Always_Not { strings: $a = "nope" condition: not $a }`, "test")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := set.ScanContext(ctx, []byte("anything")); len(got) != 0 {
+		t.Fatalf("cancelled ScanContext matched %v, want nil", got)
+	}
+}
+
+func TestHexJumpBacktrackingBounded(t *testing.T) {
+	// Pathological pattern with 3 wide jumps that previously backtracked O(4096^3).
+	set := Parse(`
+rule MultiJump {
+  strings:
+    $h = { AA [0-4096] AA [0-4096] AA [0-4096] BB }
+  condition:
+    $h
+}`, "test")
+	buf := bytes.Repeat([]byte{0xAA}, 8192)
+	start := time.Now()
+	if got := set.ScanContext(context.Background(), buf); len(got) != 0 {
+		t.Fatalf("expected no match, got %v", got)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("pathological hex jump took %v, expected bounded completion", elapsed)
+	}
+	// Verify valid match still succeeds.
+	buf[len(buf)-1] = 0xBB
+	if got := set.ScanContext(context.Background(), buf); len(got) != 1 || got[0].Rule != "MultiJump" {
+		t.Fatalf("expected MultiJump match, got %v", got)
+	}
+}
+
+func TestNocaseASCIIAvoidsFullLowerCopy(t *testing.T) {
+	set := Parse(`rule NocaseASCII { strings: $a = "PowerShell" nocase fullword condition: $a }`, "test")
+	buf := append(bytes.Repeat([]byte("padding "), 4096), []byte("run pOwErShElL now")...)
+	v := &view{raw: buf}
+	if off := set.Rules[0].patterns[0].find(context.Background(), v, 0); off < 0 {
+		t.Fatalf("expected nocase match")
+	}
+	if v.low != nil {
+		t.Fatalf("expected ASCII nocase search not to allocate view.low copy")
 	}
 }

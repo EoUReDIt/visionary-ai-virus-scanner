@@ -9,6 +9,7 @@ package rules
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -47,7 +48,20 @@ const MaxScanBytes = 16 << 20
 
 // Scan evaluates every rule against data.
 func (s *Set) Scan(data []byte) []Match {
+	return s.ScanContext(context.Background(), data)
+}
+
+// ScanContext evaluates every rule against data, stopping promptly if ctx is
+// cancelled. If ctx is cancelled mid-scan it returns nil so callers never
+// observe partial rule verdicts.
+func (s *Set) ScanContext(ctx context.Context, data []byte) []Match {
 	if s == nil || len(s.Rules) == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
 		return nil
 	}
 	size := int64(len(data))
@@ -56,12 +70,24 @@ func (s *Set) Scan(data []byte) []Match {
 	}
 	d := &view{raw: data}
 	var out []Match
+	var memoBuf []int
 	for _, r := range s.Rules {
-		ctx := &evalCtx{d: d, rule: r, size: size, memo: make([]int, len(r.patterns))}
-		for i := range ctx.memo {
-			ctx.memo[i] = unknown
+		if ctx.Err() != nil {
+			return nil
 		}
-		if r.cond.eval(ctx) != 0 {
+		if cap(memoBuf) < len(r.patterns) {
+			memoBuf = make([]int, len(r.patterns))
+		} else {
+			memoBuf = memoBuf[:len(r.patterns)]
+		}
+		for i := range memoBuf {
+			memoBuf[i] = unknown
+		}
+		ec := &evalCtx{ctx: ctx, d: d, rule: r, size: size, memo: memoBuf}
+		if r.cond.eval(ec) != 0 {
+			if ctx.Err() != nil {
+				return nil
+			}
 			out = append(out, Match{Rule: r.Name, Source: r.Source, Score: r.Score, Description: r.Meta["description"]})
 		}
 	}
@@ -80,6 +106,85 @@ func (v *view) lower() []byte {
 		v.low = bytes.ToLower(v.raw)
 	}
 	return v.low
+}
+
+func isASCIIBytes(b []byte) bool {
+	for _, c := range b {
+		if c >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLower(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
+}
+
+func hasPrefixASCIINocase(hay, needle []byte) bool {
+	if len(needle) > len(hay) {
+		return false
+	}
+	for i, nb := range needle {
+		if asciiLower(hay[i]) != nb {
+			return false
+		}
+	}
+	return true
+}
+
+// indexASCIINocase finds the first case-insensitive occurrence of a lowered
+// pure-ASCII needle in hay without copying hay.
+func indexASCIINocase(ctx context.Context, hay, needle []byte) int {
+	nlen := len(needle)
+	if nlen == 0 {
+		return 0
+	}
+	if nlen > len(hay) {
+		return -1
+	}
+	c0 := needle[0]
+	c0Up := c0
+	if c0 >= 'a' && c0 <= 'z' {
+		c0Up = c0 - ('a' - 'A')
+	}
+	limit := len(hay) - nlen + 1
+	checks := 0
+	for i := 0; i < limit; {
+		if checks&4095 == 0 && ctx != nil && ctx.Err() != nil {
+			return -1
+		}
+		checks++
+		var off int
+		if c0 == c0Up {
+			off = bytes.IndexByte(hay[i:limit], c0)
+		} else {
+			lo := bytes.IndexByte(hay[i:limit], c0)
+			if lo == 0 {
+				off = 0
+			} else if lo > 0 {
+				if hi := bytes.IndexByte(hay[i:i+lo], c0Up); hi >= 0 {
+					off = hi
+				} else {
+					off = lo
+				}
+			} else {
+				off = bytes.IndexByte(hay[i:limit], c0Up)
+			}
+		}
+		if off < 0 {
+			return -1
+		}
+		i += off
+		if hasPrefixASCIINocase(hay[i:], needle) {
+			return i
+		}
+		i++
+	}
+	return -1
 }
 
 // ---- string patterns ----
@@ -113,9 +218,50 @@ type hexTok struct {
 	alts      [][]hexTok
 }
 
-const maxJump = 4096
+const (
+	maxJump          = 4096
+	maxHexCallSteps  = 65536
+	maxHexFindBudget = 512000
+)
+
+type hexState struct {
+	ctx     context.Context
+	budget  int
+	steps   int
+	aborted bool
+	failed  map[uint64]struct{}
+}
+
+func (st *hexState) step() bool {
+	st.steps++
+	if st.steps > st.budget {
+		st.aborted = true
+		return false
+	}
+	if st.steps&255 == 0 && st.ctx != nil && st.ctx.Err() != nil {
+		st.aborted = true
+		return false
+	}
+	return true
+}
 
 func matchHex(d []byte, pos int, toks []hexTok) bool {
+	st := hexState{budget: maxHexCallSteps}
+	return matchHexRec(d, pos, toks, 0, true, &st)
+}
+
+func matchHexRec(d []byte, pos int, toks []hexTok, tokIdx int, topLevel bool, st *hexState) bool {
+	if st.aborted || !st.step() {
+		return false
+	}
+	var key uint64
+	if topLevel && len(toks) > 0 && st.failed != nil {
+		key = uint64(pos)<<16 | uint64(tokIdx&0xFFFF)
+		if _, seen := st.failed[key]; seen {
+			return false
+		}
+	}
+	startPos := pos
 	for i, t := range toks {
 		switch t.kind {
 		case hByte:
@@ -128,16 +274,81 @@ func matchHex(d []byte, pos int, toks []hexTok) bool {
 			if hi < 0 || hi > maxJump {
 				hi = maxJump
 			}
-			for j := t.min; j <= hi && pos+j <= len(d); j++ {
-				if matchHex(d, pos+j, toks[i+1:]) {
-					return true
+			if t.min < 0 {
+				t.min = 0
+			}
+			if t.min > hi || pos+t.min > len(d) {
+				return false
+			}
+			nextToks := toks[i+1:]
+			if len(nextToks) == 0 {
+				return true
+			}
+			end := pos + hi
+			if end > len(d) {
+				end = len(d)
+			}
+			// Fast path: when the token after a jump is an exact byte, scan
+			// directly to matching positions with bytes.IndexByte instead of
+			// recursing at every byte in [min..hi].
+			if nextToks[0].kind == hByte && nextToks[0].mask == 0xFF {
+				searchEnd := end + 1
+				if searchEnd > len(d) {
+					searchEnd = len(d)
+				}
+				cur := pos + t.min
+				for cur < searchEnd {
+					if st.aborted || !st.step() {
+						return false
+					}
+					off := bytes.IndexByte(d[cur:searchEnd], nextToks[0].val)
+					if off < 0 {
+						break
+					}
+					cur += off
+					if matchHexRec(d, cur, nextToks, tokIdx+i+1, topLevel, st) {
+						return true
+					}
+					if st.aborted {
+						return false
+					}
+					cur++
+				}
+			} else {
+				for j := t.min; j <= hi && pos+j <= len(d); j++ {
+					if st.aborted {
+						return false
+					}
+					if nextToks[0].kind == hByte && (pos+j >= len(d) || d[pos+j]&nextToks[0].mask != nextToks[0].val) {
+						if !st.step() {
+							return false
+						}
+						continue
+					}
+					if matchHexRec(d, pos+j, nextToks, tokIdx+i+1, topLevel, st) {
+						return true
+					}
+				}
+			}
+			if topLevel && !st.aborted && tokIdx <= 0xFFFF {
+				if st.failed == nil {
+					st.failed = make(map[uint64]struct{}, 64)
+				}
+				st.failed[uint64(startPos)<<16|uint64(tokIdx&0xFFFF)] = struct{}{}
+				if pos != startPos || i != 0 {
+					st.failed[uint64(pos)<<16|uint64((tokIdx+i)&0xFFFF)] = struct{}{}
 				}
 			}
 			return false
 		case hAlt:
 			for _, a := range t.alts {
-				seq := append(append([]hexTok{}, a...), toks[i+1:]...)
-				if matchHex(d, pos, seq) {
+				if st.aborted || !st.step() {
+					return false
+				}
+				seq := make([]hexTok, 0, len(a)+len(toks)-i-1)
+				seq = append(seq, a...)
+				seq = append(seq, toks[i+1:]...)
+				if matchHexRec(d, pos, seq, 0, false, st) {
 					return true
 				}
 			}
@@ -152,21 +363,40 @@ func isWord(b byte) bool {
 }
 
 // find returns the offset of the first match in d[from:], or -1.
-func (p *pattern) find(v *view, from int) int {
-	if from >= len(v.raw) {
+func (p *pattern) find(ctx context.Context, v *view, from int) int {
+	if from >= len(v.raw) || (ctx != nil && ctx.Err() != nil) {
 		return -1
 	}
 	switch p.kind {
 	case kText:
-		hay := v.raw
-		if p.nocase {
-			hay = v.lower()
-		}
 		best := -1
 		for _, n := range p.needles {
+			if ctx != nil && ctx.Err() != nil {
+				return -1
+			}
+			useASCIINocase := p.nocase && isASCIIBytes(n)
+			var hay []byte
+			if !useASCIINocase {
+				hay = v.raw
+				if p.nocase {
+					hay = v.lower()
+				}
+			} else {
+				hay = v.raw
+			}
 			off := from
+			iters := 0
 			for {
-				i := bytes.Index(hay[off:], n)
+				if iters&255 == 0 && ctx != nil && ctx.Err() != nil {
+					return -1
+				}
+				iters++
+				var i int
+				if useASCIINocase {
+					i = indexASCIINocase(ctx, hay[off:], n)
+				} else {
+					i = bytes.Index(hay[off:], n)
+				}
 				if i < 0 {
 					break
 				}
@@ -190,26 +420,39 @@ func (p *pattern) find(v *view, from int) int {
 			}
 			anchor = append(anchor, t.val)
 		}
+		st := hexState{ctx: ctx, budget: maxHexFindBudget}
 		if len(anchor) == 0 {
 			for i := from; i < len(v.raw); i++ {
-				if matchHex(v.raw, i, p.hex) {
+				if (i-from)&1023 == 0 && ctx != nil && ctx.Err() != nil {
+					return -1
+				}
+				if st.aborted {
+					return -1
+				}
+				if matchHexRec(v.raw, i, p.hex, 0, true, &st) {
 					return i
 				}
 			}
 			return -1
 		}
 		for off := from; ; {
+			if ctx != nil && ctx.Err() != nil || st.aborted {
+				return -1
+			}
 			i := bytes.Index(v.raw[off:], anchor)
 			if i < 0 {
 				return -1
 			}
 			i += off
-			if matchHex(v.raw, i, p.hex) {
+			if matchHexRec(v.raw, i, p.hex, 0, true, &st) {
 				return i
 			}
 			off = i + 1
 		}
 	case kRegex:
+		if ctx != nil && ctx.Err() != nil {
+			return -1
+		}
 		loc := p.re.FindIndex(v.raw[from:])
 		if loc == nil {
 			return -1
@@ -219,24 +462,31 @@ func (p *pattern) find(v *view, from int) int {
 	return -1
 }
 
-func (p *pattern) matchAt(v *view, off int) bool {
-	if off < 0 || off > len(v.raw) {
+func (p *pattern) matchAt(ctx context.Context, v *view, off int) bool {
+	if off < 0 || off > len(v.raw) || (ctx != nil && ctx.Err() != nil) {
 		return false
 	}
 	switch p.kind {
 	case kText:
-		hay := v.raw
-		if p.nocase {
-			hay = v.lower()
-		}
 		for _, n := range p.needles {
+			if p.nocase && isASCIIBytes(n) {
+				if hasPrefixASCIINocase(v.raw[off:], n) {
+					return true
+				}
+				continue
+			}
+			hay := v.raw
+			if p.nocase {
+				hay = v.lower()
+			}
 			if bytes.HasPrefix(hay[off:], n) {
 				return true
 			}
 		}
 		return false
 	case kHex:
-		return matchHex(v.raw, off, p.hex)
+		st := hexState{ctx: ctx, budget: maxHexCallSteps}
+		return matchHexRec(v.raw, off, p.hex, 0, true, &st)
 	}
 	loc := p.re.FindIndex(v.raw[off:])
 	return loc != nil && loc[0] == 0
@@ -736,15 +986,23 @@ func parseHex(s string) (toks []hexTok, rest string, err error) {
 const unknown = -2
 
 type evalCtx struct {
+	ctx  context.Context
 	d    *view
 	rule *Rule
 	size int64
 	memo []int
 }
 
+func (c *evalCtx) cancelled() bool {
+	return c.ctx != nil && c.ctx.Err() != nil
+}
+
 func (c *evalCtx) first(i int) int {
+	if c.cancelled() {
+		return -1
+	}
 	if c.memo[i] == unknown {
-		c.memo[i] = c.rule.patterns[i].find(c.d, 0)
+		c.memo[i] = c.rule.patterns[i].find(c.ctx, c.d, 0)
 	}
 	return c.memo[i]
 }
@@ -790,26 +1048,40 @@ func b2i(b bool) int64 {
 func (n nConst) eval(*evalCtx) int64 { return int64(n) }
 func (nSize) eval(c *evalCtx) int64  { return c.size }
 func (n nStr) eval(c *evalCtx) int64 { return b2i(c.first(n.idx) >= 0) }
-func (n nNot) eval(c *evalCtx) int64 { return b2i(n.x.eval(c) == 0) }
+func (n nNot) eval(c *evalCtx) int64 {
+	if c.cancelled() {
+		return 0
+	}
+	return b2i(n.x.eval(c) == 0)
+}
 func (n nStrAt) eval(c *evalCtx) int64 {
-	return b2i(c.rule.patterns[n.idx].matchAt(c.d, int(n.off.eval(c))))
+	if c.cancelled() {
+		return 0
+	}
+	return b2i(c.rule.patterns[n.idx].matchAt(c.ctx, c.d, int(n.off.eval(c))))
 }
 
 func (n nStrIn) eval(c *evalCtx) int64 {
+	if c.cancelled() {
+		return 0
+	}
 	lo, hi := int(n.lo.eval(c)), int(n.hi.eval(c))
 	if lo < 0 {
 		lo = 0
 	}
-	off := c.rule.patterns[n.idx].find(c.d, lo)
+	off := c.rule.patterns[n.idx].find(c.ctx, c.d, lo)
 	return b2i(off >= 0 && off <= hi)
 }
 
 func (n nBin) eval(c *evalCtx) int64 {
+	if c.cancelled() {
+		return 0
+	}
 	switch n.op {
 	case "and":
-		return b2i(n.a.eval(c) != 0 && n.b.eval(c) != 0)
+		return b2i(n.a.eval(c) != 0 && !c.cancelled() && n.b.eval(c) != 0)
 	case "or":
-		return b2i(n.a.eval(c) != 0 || n.b.eval(c) != 0)
+		return b2i(n.a.eval(c) != 0 || (!c.cancelled() && n.b.eval(c) != 0))
 	}
 	a, b := n.a.eval(c), n.b.eval(c)
 	switch n.op {
@@ -830,6 +1102,9 @@ func (n nBin) eval(c *evalCtx) int64 {
 func (n nOf) eval(c *evalCtx) int64 {
 	hits := 0
 	for _, i := range n.idxs {
+		if c.cancelled() {
+			return 0
+		}
 		if c.first(i) >= 0 {
 			hits++
 			if n.need > 0 && hits >= n.need {

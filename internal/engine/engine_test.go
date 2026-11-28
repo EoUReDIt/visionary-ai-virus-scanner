@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,5 +231,43 @@ func TestCacheBoundedEviction(t *testing.T) {
 	e.cacheMu.Unlock()
 	if got > e.cacheMaxEntries() {
 		t.Fatalf("cache size %d exceeds cap %d", got, e.cacheMaxEntries())
+	}
+}
+
+func TestScanPathsCancelDoesNotDrainQueue(t *testing.T) {
+	e, dir := setup(t)
+	e.Cfg.Scan.Workers = 1
+	// Create 320 files (> 256 channel buffer) so draining the buffer after
+	// cancellation would scan many files instead of stopping immediately.
+	for i := 0; i < 320; i++ {
+		put(t, dir, fmt.Sprintf("f-%03d.txt", i), []byte("ordinary content"))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var seen int
+	sum := e.ScanPaths(ctx, []string{dir}, Options{NoCache: true}, func(*Result) {
+		seen++
+		if seen >= 2 {
+			cancel()
+		}
+	})
+	if !sum.Cancelled {
+		t.Fatalf("expected sum.Cancelled=true")
+	}
+	if sum.Files > 10 {
+		t.Fatalf("cancelled ScanPaths drained too many queued files: %d", sum.Files)
+	}
+}
+
+func TestScanFileCancelledSkipsCleanly(t *testing.T) {
+	e, dir := setup(t)
+	p := put(t, dir, "e.com", eicar())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := e.ScanFile(ctx, p, Options{Quarantine: true})
+	if r.Verdict != Skipped {
+		t.Fatalf("cancelled ScanFile verdict = %s, want %s", r.Verdict, Skipped)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("cancelled ScanFile must not quarantine file: %v", err)
 	}
 }
