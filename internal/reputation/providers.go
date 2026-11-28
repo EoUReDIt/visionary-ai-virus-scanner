@@ -173,6 +173,7 @@ type cacheRecord struct {
 type DiskCache struct {
 	path       string
 	store      cache.Store
+	writeMu    sync.Mutex // serialises snapshot+write so an older snapshot never lands after a newer one
 	mu         sync.Mutex
 	entries    map[string]cacheRecord
 	dirty      bool
@@ -305,6 +306,21 @@ func (c *DiskCache) Put(provider, sha256 string, rec cacheRecord) {
 		c.mu.Unlock()
 		return
 	}
+	c.mu.Unlock()
+	c.writeSnapshot()
+}
+
+// writeSnapshot serialises the current entries to disk. Writers are
+// serialised and the snapshot is taken inside the write lock, so concurrent
+// flushes cannot persist stale data over newer data.
+func (c *DiskCache) writeSnapshot() {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	c.mu.Lock()
+	if !c.dirty || c.path == "" {
+		c.mu.Unlock()
+		return
+	}
 	snapshot, _ := json.Marshal(c.entries)
 	c.dirty = false
 	c.mu.Unlock()
@@ -340,18 +356,13 @@ func (c *DiskCache) EndBatch() {
 		c.batchDepth--
 	}
 	shouldFlush := c.batchDepth == 0 && c.dirty && c.path != ""
-	var snapshot []byte
-	if shouldFlush {
-		if c.flushTimer != nil {
-			c.flushTimer.Stop()
-			c.flushTimer = nil
-		}
-		snapshot, _ = json.Marshal(c.entries)
-		c.dirty = false
+	if shouldFlush && c.flushTimer != nil {
+		c.flushTimer.Stop()
+		c.flushTimer = nil
 	}
 	c.mu.Unlock()
-	if shouldFlush && len(snapshot) > 0 {
-		_ = config.WriteAtomic(c.path, snapshot, 0o644)
+	if shouldFlush {
+		c.writeSnapshot()
 	}
 }
 
@@ -369,16 +380,8 @@ func (c *DiskCache) Flush() {
 		c.flushTimer.Stop()
 		c.flushTimer = nil
 	}
-	if !c.dirty || c.path == "" {
-		c.mu.Unlock()
-		return
-	}
-	snapshot, _ := json.Marshal(c.entries)
-	c.dirty = false
 	c.mu.Unlock()
-	if len(snapshot) > 0 {
-		_ = config.WriteAtomic(c.path, snapshot, 0o644)
-	}
+	c.writeSnapshot()
 }
 
 // ---- Multi-provider composite ----
@@ -416,6 +419,12 @@ func (m *Multi) LookupDetail(ctx context.Context, sha256 string) (malicious, tot
 	var best LookupResult
 	var firstErr error
 	for _, p := range m.Providers {
+		if err := ctx.Err(); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			break
+		}
 		mal, tot, lbl, det, ok, e := p.LookupDetail(ctx, sha256)
 		if e != nil {
 			if firstErr == nil {
