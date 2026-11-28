@@ -205,9 +205,7 @@ func (n *NVD) parsePayload(raw []byte) ([]Advisory, int, error) {
 					summary = strings.TrimSpace(d.Value)
 				}
 			}
-			if len(summary) > 260 {
-				summary = strings.TrimSpace(summary[:257]) + "…"
-			}
+			summary = truncateRunes(summary, 260)
 			var score float64
 			sev := "UNKNOWN"
 			switch {

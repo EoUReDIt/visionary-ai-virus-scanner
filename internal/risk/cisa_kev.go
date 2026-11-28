@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -103,9 +104,7 @@ func (c *CISAKEV) Search(ctx context.Context, opts SearchOptions) ([]Advisory, i
 			prod = vp + "/" + prod
 		}
 		summary := strings.TrimSpace(v.ShortDescription)
-		if len(summary) > 260 {
-			summary = strings.TrimSpace(summary[:257]) + "…"
-		}
+		summary = truncateRunes(summary, 260)
 		adv := Advisory{
 			ID:        id,
 			Source:    "cisa-kev",
@@ -122,6 +121,8 @@ func (c *CISAKEV) Search(ctx context.Context, opts SearchOptions) ([]Advisory, i
 		adv.ScanHints = MatchHints(adv)
 		matched = append(matched, adv)
 	}
+	// The catalog is not newest-first; show the most recently added entries.
+	sort.SliceStable(matched, func(i, j int) bool { return matched[i].Published > matched[j].Published })
 	total := len(matched)
 	if len(matched) > limit {
 		matched = matched[:limit]
