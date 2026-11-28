@@ -182,7 +182,7 @@ func TestInternetDBStrictPrivateIPGuard(t *testing.T) {
 
 	// Private / local / loopback / link-local / CGNAT IPs MUST be blocked locally
 	// with zero outbound network requests.
-	for _, blocked := range []string{"192.168.1.1", "10.0.0.1", "172.16.5.4", "127.0.0.1", "169.254.1.1", "100.64.0.1", "0.0.0.0"} {
+	for _, blocked := range []string{"192.168.1.1", "10.0.0.1", "172.16.5.4", "127.0.0.1", "169.254.1.1", "100.64.0.1", "0.0.0.0", "1.1.1.1", "8.8.8.8", "192.0.1.1"} {
 		if _, err := idb.Lookup(context.Background(), blocked); !errors.Is(err, ErrPrivateIP) {
 			t.Errorf("expected ErrPrivateIP for %s, got %v", blocked, err)
 		}
@@ -191,8 +191,8 @@ func TestInternetDBStrictPrivateIPGuard(t *testing.T) {
 		t.Fatalf("private IP must never trigger an HTTP request; got %d calls", hits.Load())
 	}
 
-	// Valid public IPv4 lookup hits InternetDB once and caches on disk.
-	exp, err := idb.Lookup(context.Background(), "1.1.1.1")
+	// Lookup inside the allowed 192.0.0.0/24 range hits InternetDB once and caches on disk.
+	exp, err := idb.Lookup(context.Background(), "192.0.0.8")
 	if err != nil {
 		t.Fatalf("public IP lookup failed: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestInternetDBStrictPrivateIPGuard(t *testing.T) {
 		t.Fatalf("unexpected exposure report: %+v", exp)
 	}
 	// Second lookup must hit cache (still only 1 HTTP request).
-	exp2, err := idb.Lookup(context.Background(), "1.1.1.1")
+	exp2, err := idb.Lookup(context.Background(), "192.0.0.8")
 	if err != nil || !exp2.Cached || hits.Load() != 1 {
 		t.Fatalf("expected cached second lookup with 1 total HTTP hit: cached=%v hits=%d err=%v", exp2.Cached, hits.Load(), err)
 	}

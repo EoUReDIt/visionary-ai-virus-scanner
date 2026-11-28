@@ -48,13 +48,15 @@ func TestTruncateRunesKeepsUTF8(t *testing.T) {
 	}
 }
 
-func TestValidatePublicIPRejectsReservedRanges(t *testing.T) {
-	for _, ip := range []string{"0.1.2.3", "192.0.0.8", "240.0.0.1", "255.255.255.255", "10.0.0.1", "127.0.0.1"} {
+func TestValidatePublicIPAllowsOnlyIETFRange(t *testing.T) {
+	for _, ip := range []string{"8.8.8.8", "1.1.1.1", "0.1.2.3", "192.0.1.1", "191.255.255.255", "240.0.0.1", "10.0.0.1", "127.0.0.1", "::1"} {
 		if _, err := ValidatePublicIP(ip); err == nil {
 			t.Errorf("%s accepted", ip)
 		}
 	}
-	if _, err := ValidatePublicIP("8.8.8.8"); err != nil {
-		t.Errorf("public IP rejected: %v", err)
+	for _, ip := range []string{"192.0.0.0", "192.0.0.8", "192.0.0.255", "::ffff:192.0.0.9"} {
+		if _, err := ValidatePublicIP(ip); err != nil {
+			t.Errorf("%s rejected: %v", ip, err)
+		}
 	}
 }

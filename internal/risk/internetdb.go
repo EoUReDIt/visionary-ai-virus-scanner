@@ -17,21 +17,14 @@ import (
 // DefaultInternetDBEndpoint is Shodan's free keyless InternetDB API.
 const DefaultInternetDBEndpoint = "https://internetdb.shodan.io"
 
-// ErrPrivateIP is returned whenever a caller attempts to query a private,
-// loopback, link-local, or non-routable IP address. Private LAN addresses stay
-// strictly behind the home router and never leave the host.
-var ErrPrivateIP = errors.New("internetdb: private/local IP addresses are blocked locally (behind-home-network scope)")
+// ErrPrivateIP is returned whenever a caller attempts to query an IP address
+// outside the single allowed range (see allowedPrefix). Everything else, private
+// LAN, loopback, link-local and every other public address included, is
+// blocked locally and never leaves the host.
+var ErrPrivateIP = errors.New("internetdb: only 192.0.0.0/24 is allowed; all other IP addresses are blocked locally")
 
-var (
-	cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
-	benchPrefix = netip.MustParsePrefix("198.18.0.0/15")
-	test1Prefix = netip.MustParsePrefix("192.0.2.0/24")
-	test2Prefix = netip.MustParsePrefix("198.51.100.0/24")
-	test3Prefix = netip.MustParsePrefix("203.0.113.0/24")
-	thisNetwork = netip.MustParsePrefix("0.0.0.0/8")    // "this network"
-	ietfProto   = netip.MustParsePrefix("192.0.0.0/24") // IETF protocol assignments
-	reserved    = netip.MustParsePrefix("240.0.0.0/4")  // reserved, includes broadcast
-)
+// allowedPrefix is the only range InternetDB lookups are permitted for.
+var allowedPrefix = netip.MustParsePrefix("192.0.0.0/24")
 
 var riskyHomePorts = map[int]string{
 	21:   "FTP",
@@ -62,9 +55,8 @@ type IPExposure struct {
 	Cached     bool     `json:"cached,omitempty"`
 }
 
-// ValidatePublicIP parses raw as a globally routable IPv4 address and strictly
-// rejects RFC 1918 private LANs, loopback, link-local, CGNAT, multicast, and
-// documentation ranges before any network request is made.
+// ValidatePublicIP parses raw as an IPv4 address and rejects everything except
+// the allowed range (192.0.0.0/24) before any network request is made.
 func ValidatePublicIP(raw string) (string, error) {
 	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
 	if err != nil {
@@ -74,13 +66,9 @@ func ValidatePublicIP(raw string) (string, error) {
 		addr = addr.Unmap()
 	}
 	if !addr.Is4() {
-		return "", errors.New("internetdb: only public IPv4 addresses are supported")
+		return "", errors.New("internetdb: only IPv4 addresses are supported")
 	}
-	if addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() ||
-		addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() ||
-		cgnatPrefix.Contains(addr) || benchPrefix.Contains(addr) ||
-		test1Prefix.Contains(addr) || test2Prefix.Contains(addr) || test3Prefix.Contains(addr) ||
-		thisNetwork.Contains(addr) || ietfProto.Contains(addr) || reserved.Contains(addr) {
+	if !allowedPrefix.Contains(addr) {
 		return "", ErrPrivateIP
 	}
 	return addr.String(), nil
