@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -66,6 +67,18 @@ func DefaultWatchPaths() []string {
 	}
 	p = append(p, startupDirs()...)
 	p = append(p, filepath.Join(os.Getenv("SystemRoot"), "Temp"))
+	return existing(p...)
+}
+
+// LiteWatchPaths is the narrow default for the Lite edition: where new
+// programs arrive (Downloads, Desktop, startup folders). Temp and AppData are
+// left to the on-execute scan, which costs nothing until something runs.
+func LiteWatchPaths() []string {
+	var p []string
+	for _, u := range userProfiles() {
+		p = append(p, filepath.Join(u, "Downloads"), filepath.Join(u, "Desktop"))
+	}
+	p = append(p, startupDirs()...)
 	return existing(p...)
 }
 
@@ -184,6 +197,20 @@ func AutorunBinaries() []string {
 	return out
 }
 
+type procKey struct {
+	pid, ppid int
+	name      string
+}
+
+var (
+	procMu    sync.Mutex
+	procCache = map[procKey]Proc{}
+)
+
+// ListProcesses takes a Toolhelp snapshot and resolves image path and command
+// line only for processes it has not seen before: a running process keeps both
+// for life, and opening every process on every poll was the guard's largest
+// fixed cost. PID reuse is caught because the parent and name must match too.
 func ListProcesses() ([]Proc, error) {
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
@@ -193,14 +220,28 @@ func ListProcesses() ([]Proc, error) {
 	var pe windows.ProcessEntry32
 	pe.Size = uint32(unsafe.Sizeof(pe))
 	var out []Proc
+	seen := map[procKey]Proc{}
 	for err = windows.Process32First(snap, &pe); err == nil; err = windows.Process32Next(snap, &pe) {
 		p := Proc{PID: int(pe.ProcessID), PPID: int(pe.ParentProcessID),
 			Name: windows.UTF16ToString(pe.ExeFile[:])}
+		k := procKey{p.PID, p.PPID, p.Name}
+		procMu.Lock()
+		cached, ok := procCache[k]
+		procMu.Unlock()
+		if ok {
+			out = append(out, cached)
+			seen[k] = cached
+			continue
+		}
 		if pe.ProcessID > 4 {
 			p.Exe, p.Cmdline = procDetails(pe.ProcessID)
 		}
 		out = append(out, p)
+		seen[k] = p
 	}
+	procMu.Lock()
+	procCache = seen // forget processes that exited
+	procMu.Unlock()
 	return out, nil
 }
 

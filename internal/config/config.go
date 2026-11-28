@@ -38,7 +38,17 @@ type Realtime struct {
 	Excludes       []string `json:"excludes"`
 	Workers        int      `json:"workers"`   // scan workers for the guard; 0 = 2
 	SettleMS       int      `json:"settle_ms"` // wait for a file to stop changing; 0 = 700
+	// SkipExtensions are data file types (lower case, with the dot) the file
+	// watcher does not scan: logs, media and databases cannot start by
+	// themselves. Executables, scripts, documents and archives are never in it.
+	SkipExtensions []string `json:"skip_extensions"`
+	BackoffS       int      `json:"backoff_s"`   // rescan backoff base in seconds; 0 = 5 (then x3, x12)
+	CPUPercent     int      `json:"cpu_percent"` // duty-cycle cap per scan worker, 1-100; 0 = off
 }
+
+// LiteSkipExtensions is the data-file list the Lite preset starts with.
+var LiteSkipExtensions = []string{".log", ".tmp", ".etl", ".db", ".sqlite", ".sqlite3", ".mdb", ".ldb",
+	".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".mp3", ".mp4", ".mkv", ".avi", ".mov", ".wav", ".flac"}
 
 type Scan struct {
 	MaxFileSizeMB int      `json:"max_file_size_mb"`
@@ -65,7 +75,7 @@ type LocalAI struct {
 }
 
 type CloudAI struct {
-	Provider      string `json:"provider"`           // gemini | claude | openai
+	Provider      string `json:"provider"` // gemini | claude | openai
 	Model         string `json:"model"`
 	Endpoint      string `json:"endpoint,omitempty"` // optional custom OpenAI-compatible base URL
 	Effort        string `json:"effort,omitempty"`
@@ -81,8 +91,8 @@ type AI struct {
 }
 
 type Reputation struct {
-	Provider    string `json:"provider,omitempty"`      // circl | virustotal | otx | both
-	CIRCL       bool   `json:"circl,omitempty"`         // keyless CIRCL hashlookup (NSRL known-good)
+	Provider    string `json:"provider,omitempty"` // circl | virustotal | otx | both
+	CIRCL       bool   `json:"circl,omitempty"`    // keyless CIRCL hashlookup (NSRL known-good)
 	VirusTotal  bool   `json:"virustotal"`
 	OTX         bool   `json:"otx,omitempty"`
 	OTXLastSync string `json:"otx_last_sync,omitempty"` // RFC3339 cursor for compact incremental OTX feed export
@@ -98,11 +108,11 @@ func (r Reputation) Enabled() bool {
 // aggressively it scans.
 type RiskExchange struct {
 	Enabled        bool   `json:"enabled"`
-	Provider       string `json:"provider,omitempty"`      // nvd | cisa-kev | custom
-	Endpoint       string `json:"endpoint,omitempty"`      // optional custom HTTP/JSON endpoint
-	KEVOnly        bool   `json:"kev_only"`                // focus on CISA Known Exploited Vulnerabilities
-	MinSeverity    string `json:"min_severity,omitempty"`  // CRITICAL | HIGH | MEDIUM | LOW
-	AutoPrioritize bool   `json:"auto_prioritize"`         // merge high-risk CVE targets into Quick Scans
+	Provider       string `json:"provider,omitempty"`     // nvd | cisa-kev | custom
+	Endpoint       string `json:"endpoint,omitempty"`     // optional custom HTTP/JSON endpoint
+	KEVOnly        bool   `json:"kev_only"`               // focus on CISA Known Exploited Vulnerabilities
+	MinSeverity    string `json:"min_severity,omitempty"` // CRITICAL | HIGH | MEDIUM | LOW
+	AutoPrioritize bool   `json:"auto_prioritize"`        // merge high-risk CVE targets into Quick Scans
 }
 
 type Channel struct {
@@ -147,20 +157,20 @@ type Windows struct {
 }
 
 type Config struct {
-	Profile    string     `json:"profile"` // balanced | gamer | dev
-	Protection Protection `json:"protection"`
-	Realtime   Realtime   `json:"realtime"`
-	Scan       Scan       `json:"scan"`
+	Profile    string       `json:"profile"` // balanced | gamer | dev
+	Protection Protection   `json:"protection"`
+	Realtime   Realtime     `json:"realtime"`
+	Scan       Scan         `json:"scan"`
 	AI         AI           `json:"ai"`
 	Reputation Reputation   `json:"reputation"`
 	Risk       RiskExchange `json:"risk"`
 	Channels   []Channel    `json:"channels"`
-	Behavior   Behavior   `json:"behavior"`
-	Security   Security   `json:"security"`
-	GameMode   GameMode   `json:"game_mode"`
-	Allow      Allow      `json:"allow"`
-	Windows    Windows    `json:"windows"`
-	UI         UISettings `json:"ui"`
+	Behavior   Behavior     `json:"behavior"`
+	Security   Security     `json:"security"`
+	GameMode   GameMode     `json:"game_mode"`
+	Allow      Allow        `json:"allow"`
+	Windows    Windows      `json:"windows"`
+	UI         UISettings   `json:"ui"`
 }
 
 type UISettings struct {
@@ -178,6 +188,8 @@ func ApplyLite(c *Config) {
 	c.Scan.AIBudget = 5
 	c.Realtime.Workers = 1
 	c.Realtime.SettleMS = 2000
+	c.Realtime.CPUPercent = 15
+	c.Realtime.SkipExtensions = append([]string(nil), LiteSkipExtensions...)
 	c.Behavior.PollMS = 3000
 	c.GameMode.Auto = true
 	c.AI.Local.CPUOnly = true

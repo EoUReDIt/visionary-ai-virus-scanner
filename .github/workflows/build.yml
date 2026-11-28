@@ -35,6 +35,11 @@ jobs:
         run: |
           go build -tags lite -o visionary-lite ./cmd/visionary
           sh scripts/idle-budget.sh ./visionary-lite 40 3
+      - name: Hot-file guard budget (busy 20 MB file)
+        run: |
+          go build -o visionary-core ./cmd/visionary
+          sh scripts/guard-budget.sh ./visionary-lite 2 20
+          sh scripts/guard-budget.sh ./visionary-core 5 20
 
   windows:
     needs: test

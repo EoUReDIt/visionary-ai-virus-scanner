@@ -38,6 +38,7 @@ type App struct {
 	mu       sync.Mutex
 	cfg      *config.Config
 	cfgMod   time.Time
+	manMod   time.Time
 	db       *defs.DB
 	eng      atomic.Pointer[engine.Engine]
 	triage   *ai.Triage
@@ -121,6 +122,7 @@ func (a *App) load() error {
 	oldRepCache := a.repCache
 	oldStore := a.store
 	a.cfg, a.db, a.triage, a.store, a.repCache, a.cfgMod = cfg, db, triage, store, repCache, config.ModTime()
+	a.manMod = defs.ManifestModTime()
 	a.mu.Unlock()
 	if oldRepCache != nil {
 		oldRepCache.Flush()
@@ -191,7 +193,14 @@ func (a *App) setReputationDebounce(d time.Duration) {
 // Reload picks up changes made by another process (CLI, UI or guard).
 func (a *App) Reload() bool {
 	a.mu.Lock()
-	stale := !config.ModTime().Equal(a.cfgMod) || defs.LoadManifest().Revision != a.db.Manifest.Revision
+	stale := !config.ModTime().Equal(a.cfgMod)
+	if !stale {
+		// Only parse the manifest when its file changed on disk.
+		if mm := defs.ManifestModTime(); !mm.Equal(a.manMod) {
+			a.manMod = mm
+			stale = defs.LoadManifest().Revision != a.db.Manifest.Revision
+		}
+	}
 	a.mu.Unlock()
 	if stale {
 		_ = a.load()
@@ -1067,6 +1076,14 @@ func (a *App) Set(key, value string) error {
 			c.AI.Local.KeepAlive = v
 		case "realtime.workers":
 			return needInt(&c.Realtime.Workers, 0, 16)
+		case "realtime.cpu_percent":
+			return needInt(&c.Realtime.CPUPercent, 0, 100)
+		case "realtime.backoff_s":
+			return needInt(&c.Realtime.BackoffS, 0, 3600)
+		case "realtime.watch_paths":
+			c.Realtime.WatchPaths = splitList(value)
+		case "realtime.skip_extensions":
+			c.Realtime.SkipExtensions = normalizeExts(splitList(value))
 		case "realtime.settle_ms":
 			return needInt(&c.Realtime.SettleMS, 0, 60000)
 		case "behavior.poll_ms":
@@ -1078,6 +1095,40 @@ func (a *App) Set(key, value string) error {
 		}
 		return nil
 	})
+}
+
+// splitList turns "a;b" or "a,b" into a trimmed list; "" or "default" clears it.
+func splitList(v string) []string {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.EqualFold(v, "default") {
+		return nil
+	}
+	sep := ";"
+	if !strings.Contains(v, ";") && !strings.ContainsAny(v, `\/`) {
+		sep = ","
+	}
+	var out []string
+	for _, x := range strings.Split(v, sep) {
+		if x = strings.TrimSpace(x); x != "" {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func normalizeExts(in []string) []string {
+	var out []string
+	for _, x := range in {
+		x = strings.ToLower(strings.TrimSpace(x))
+		if x == "" {
+			continue
+		}
+		if !strings.HasPrefix(x, ".") {
+			x = "." + x
+		}
+		out = append(out, x)
+	}
+	return out
 }
 
 func parseBool(s string) (bool, error) {
