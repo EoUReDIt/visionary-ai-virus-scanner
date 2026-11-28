@@ -64,3 +64,10 @@ func SameBoot(a, b time.Time) bool {
 	}
 	return d < 2*time.Minute
 }
+
+// Conn is one established outbound IPv4 TCP connection.
+type Conn struct {
+	PID        int    // owning process, 0 when unknown
+	RemoteIP   string // dotted-quad remote address
+	RemotePort int
+}
