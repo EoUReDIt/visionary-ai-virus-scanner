@@ -58,6 +58,9 @@ type Callbacks struct {
 	OnResume         func() error
 	OnToggleGameMode func() error
 	OnQuit           func()
+	// OnQuitAll stops everything: the dashboard, the tray, the service and
+	// local AI helpers. Nil hides the menu item.
+	OnQuitAll func()
 }
 
 // Compute derives the tray state, short label, detail text, and Win32 tooltip

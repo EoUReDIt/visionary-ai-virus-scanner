@@ -255,6 +255,14 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 			return s.a.SetGameMode("on")
 		},
 		OnQuit: cancelUI,
+		OnQuitAll: func() {
+			// The service and any terminal guard see the request file and
+			// exit; this process closes itself. No password prompt is
+			// possible here, so a protected install keeps running.
+			if err := s.a.Quit(""); err == nil {
+				cancelUI()
+			}
+		},
 	})
 	defer s.tray.Close()
 
@@ -295,6 +303,10 @@ func Serve(ctx context.Context, a *app.App, port int, open, guard bool) error {
 			case <-uiCtx.Done():
 				return
 			case <-t.C:
+				if app.QuitRequested() {
+					cancelUI()
+					return
+				}
 				a.Reload()
 				a.GameMode()
 				s.notifyTray()
@@ -655,11 +667,11 @@ func (s *server) ai(r *http.Request) (any, error) {
 			"otx_last_sync": cfg.Reputation.OTXLastSync,
 			"cache_backend": s.a.CacheBackend(),
 			"recommended":   ai.RecommendedFor(cfg.AI.Local.MaxParamsB),
-			"models":       models,
-			"ollama":       runtime,
-			"stored":       stored,
-			"download":     s.dl.snapshot(),
-			"hf_token_set": secure.Secret("huggingface") != "",
+			"models":        models,
+			"ollama":        runtime,
+			"stored":        stored,
+			"download":      s.dl.snapshot(),
+			"hf_token_set":  secure.Secret("huggingface") != "",
 		}, nil
 	}
 	q, err := body(r)
