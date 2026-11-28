@@ -63,6 +63,15 @@ func dir(parts ...string) string {
 	return config.Path(append([]string{"defs"}, parts...)...)
 }
 
+// ManifestModTime lets a long-running process skip re-reading the manifest
+// until the file has actually changed.
+func ManifestModTime() time.Time {
+	if st, err := os.Stat(dir("manifest.json")); err == nil {
+		return st.ModTime()
+	}
+	return time.Time{}
+}
+
 func LoadManifest() Manifest {
 	var m Manifest
 	if b, err := os.ReadFile(dir("manifest.json")); err == nil {

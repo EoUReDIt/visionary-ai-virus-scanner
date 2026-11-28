@@ -41,6 +41,10 @@ func DefaultWatchPaths() []string {
 	return existing(filepath.Join(h, "Downloads"), filepath.Join(h, "Desktop"))
 }
 
+// LiteWatchPaths is the narrow default for the Lite edition: where new
+// programs arrive. Core watches more.
+func LiteWatchPaths() []string { return DefaultWatchPaths() }
+
 func QuickScanTargets() []string {
 	h := home()
 	t := existing(filepath.Join(h, "Downloads"), filepath.Join(h, "Desktop"),

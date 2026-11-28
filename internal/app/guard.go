@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultSettle   = 700 * time.Millisecond  // wait for a file to stop changing
+	defaultSettle   = 700 * time.Millisecond // wait for a file to stop changing
 	defaultWorkers  = 2
 	defaultPoll     = 1500 * time.Millisecond // process monitor interval
 	coalesceWindow  = 3 * time.Second         // skip duplicate watcher rescans within this window
@@ -65,6 +65,7 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 		pending  = map[string]time.Time{}
 		inFlight = map[string]bool{}
 		recent   = map[string]time.Time{}
+		backoff  = newRescanBackoff(time.Duration(a.Config().Realtime.BackoffS) * time.Second)
 		burst    int
 		wasOn    = true
 		gaming   bool
@@ -89,7 +90,9 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 		go func() {
 			defer wg.Done()
 			for p := range jobs {
+				began := time.Now()
 				a.guardScan(ctx, p, "real-time", nil, nil, say)
+				throttle(ctx, time.Since(began), a.Config().Realtime.CPUPercent)
 				pendMu.Lock()
 				delete(inFlight, p)
 				recent[p] = time.Now()
@@ -99,6 +102,9 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 	}
 	defer func() { close(jobs); wg.Wait() }()
 
+	// The guard is housekeeping: always run it below normal priority so it
+	// yields to whatever the user is doing. Game mode defers work as well.
+	plat.SetBackgroundPriority(true)
 	a.Log("system", "info", "Real-time guard started", nil)
 	say("guard started (data: %s)", config.Dir())
 	defer a.Log("system", "info", "Real-time guard stopped", nil)
@@ -106,7 +112,7 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
-	var lastProc, lastCfg, lastSlow, lastBurst time.Time
+	var lastProc, lastCfg, lastSlow, lastBurst, lastBeat time.Time
 
 	for {
 		select {
@@ -118,6 +124,9 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 				continue
 			}
 			cfg := a.Config()
+			if skippedExt(ev.Path, cfg.Realtime.SkipExtensions) {
+				continue
+			}
 			if config.Excluded(ev.Path, cfg.Realtime.Excludes) || config.Excluded(ev.Path, cfg.Scan.Excludes) ||
 				config.Excluded(ev.Path, config.ProfileExcludes(cfg.Profile)) {
 				continue
@@ -139,7 +148,10 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 					a.setReputationDebounce(5 * time.Second)
 					say("settings or definitions changed, reloaded")
 				}
-				_ = os.WriteFile(heartbeat(), []byte(now.Format(time.RFC3339)), 0o644)
+				if now.Sub(lastBeat) >= 10*time.Second {
+					lastBeat = now
+					_ = os.WriteFile(heartbeat(), []byte(now.Format(time.RFC3339)), 0o644)
+				}
 				on, why := a.ProtectionActive()
 				if on != wasOn {
 					say("protection %s", why)
@@ -147,7 +159,6 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 				}
 				if g := a.GameMode(); g != gaming {
 					gaming = g
-					plat.SetBackgroundPriority(g)
 					if g {
 						say("game mode on: background work deferred")
 					} else {
@@ -164,8 +175,13 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 				cfg := a.Config()
 				roots := cfg.Realtime.WatchPaths
 				if len(roots) == 0 {
-					roots = plat.DefaultWatchPaths()
+					if cfg.Profile == "lite" {
+						roots = plat.LiteWatchPaths()
+					} else {
+						roots = plat.DefaultWatchPaths()
+					}
 				}
+				roots = append([]string(nil), roots...)
 				sort.Strings(roots)
 				if key := strings.Join(roots, "|"); key != watching || watcher == nil && watching == "" {
 					closeWatcher()
@@ -196,6 +212,9 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 					if last, ok := recent[p]; ok && now.Sub(last) < coalesceWindow && t.Before(last) {
 						delete(pending, p)
 						continue
+					}
+					if !backoff.allow(p, now) {
+						continue // still changing: leave it pending until its wait is over
 					}
 					select {
 					case jobs <- p:
@@ -262,6 +281,7 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 				a.Engine().Flush()
 				a.FlushReputation()
 				pendMu.Lock()
+				backoff.prune(now)
 				for p, t := range recent {
 					if now.Sub(t) > 2*coalesceWindow {
 						delete(recent, p)

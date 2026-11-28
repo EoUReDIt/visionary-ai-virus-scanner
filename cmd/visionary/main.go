@@ -1091,7 +1091,7 @@ func cmdSettings(a *app.App, fs *flag.FlagSet, rest []string) {
 				"ai.sensitivity", "ai.confidence_threshold", "ai.cloud.provider", "ai.cloud.endpoint",
 				"ai.cloud.share_snippets", "ai.cloud.model", "ai.cloud.effort", "ai.local.endpoint", "ai.local.provider",
 				"ai.local.server_path", "ai.local.max_params_b", "ai.local.cpu_only", "ai.local.threads",
-				"ai.local.keep_alive", "realtime.workers", "realtime.settle_ms", "behavior.poll_ms", "ui.port"}
+				"ai.local.keep_alive", "realtime.workers", "realtime.settle_ms", "realtime.cpu_percent", "realtime.backoff_s", "realtime.watch_paths", "realtime.skip_extensions", "behavior.poll_ms", "ui.port"}
 			sort.Strings(keys)
 			fmt.Println(dim("\nsettable with `visionary settings set <key> <value>`:\n  " + strings.Join(keys, "\n  ")))
 		}
