@@ -28,6 +28,9 @@ var (
 	test1Prefix = netip.MustParsePrefix("192.0.2.0/24")
 	test2Prefix = netip.MustParsePrefix("198.51.100.0/24")
 	test3Prefix = netip.MustParsePrefix("203.0.113.0/24")
+	thisNetwork = netip.MustParsePrefix("0.0.0.0/8")    // "this network"
+	ietfProto   = netip.MustParsePrefix("192.0.0.0/24") // IETF protocol assignments
+	reserved    = netip.MustParsePrefix("240.0.0.0/4")  // reserved, includes broadcast
 )
 
 var riskyHomePorts = map[int]string{
@@ -76,7 +79,8 @@ func ValidatePublicIP(raw string) (string, error) {
 	if addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() ||
 		addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() ||
 		cgnatPrefix.Contains(addr) || benchPrefix.Contains(addr) ||
-		test1Prefix.Contains(addr) || test2Prefix.Contains(addr) || test3Prefix.Contains(addr) {
+		test1Prefix.Contains(addr) || test2Prefix.Contains(addr) || test3Prefix.Contains(addr) ||
+		thisNetwork.Contains(addr) || ietfProto.Contains(addr) || reserved.Contains(addr) {
 		return "", ErrPrivateIP
 	}
 	return addr.String(), nil

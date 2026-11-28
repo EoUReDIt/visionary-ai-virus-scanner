@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/EoUReDIt/visionary-ai-virus-scanner/internal/config"
 )
@@ -276,6 +277,8 @@ var targetRules = []targetRule{
 	},
 }
 
+var archiveWords = []string{"archive", "archives", "zip", "rar", "extraction"}
+
 func envPaths(specs ...[]string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -302,17 +305,47 @@ func envPaths(specs ...[]string) []string {
 
 // MatchHints returns human-readable scan-target hints for one advisory.
 func MatchHints(a Advisory) []string {
-	haystack := strings.ToLower(a.Summary + " " + a.KEVName + " " + strings.Join(a.Products, " "))
+	haystack := advisoryText(a)
 	var hints []string
 	for _, r := range targetRules {
-		for _, kw := range r.keywords {
-			if strings.Contains(haystack, kw) {
-				hints = append(hints, r.product)
-				break
-			}
+		if r.matches(haystack) {
+			hints = append(hints, r.product)
 		}
 	}
 	return hints
+}
+
+func advisoryText(a Advisory) string {
+	return strings.ToLower(a.Summary + " " + a.KEVName + " " + strings.Join(a.Products, " "))
+}
+
+func (r targetRule) matches(haystack string) bool {
+	return containsAnyWord(haystack, r.keywords)
+}
+
+// containsAnyWord reports whether any keyword appears in text as a whole word.
+// Letters and digits join a word; anything else (space, '_', '/', '-') ends it,
+// so "rar" matches "WinRAR and rar files" but not "library" or "parameter",
+// and "git" does not match "digital". text and keywords must be lower case.
+func containsAnyWord(text string, keywords []string) bool {
+	for _, kw := range keywords {
+		for from := 0; ; {
+			i := strings.Index(text[from:], kw)
+			if i < 0 {
+				break
+			}
+			start, end := from+i, from+i+len(kw)
+			if (start == 0 || !isWordByte(text[start-1])) && (end == len(text) || !isWordByte(text[end])) {
+				return true
+			}
+			from = start + 1
+		}
+	}
+	return false
+}
+
+func isWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b >= 0x80
 }
 
 // ComputeGuidance evaluates synced CVE advisories and produces a concrete scan
@@ -349,19 +382,12 @@ func ComputeGuidance(st State) Guidance {
 		case "HIGH":
 			g.HighCount++
 		}
-		haystack := strings.ToLower(a.Summary + " " + a.KEVName + " " + strings.Join(a.Products, " "))
-		if strings.Contains(haystack, "archive") || strings.Contains(haystack, "zip") || strings.Contains(haystack, "rar") || strings.Contains(haystack, "extraction") {
+		haystack := advisoryText(a)
+		if containsAnyWord(haystack, archiveWords) {
 			archiveTriggered = true
 		}
 		for _, r := range targetRules {
-			matched := false
-			for _, kw := range r.keywords {
-				if strings.Contains(haystack, kw) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
+			if !r.matches(haystack) {
 				continue
 			}
 			if r.archiveRisk {
@@ -488,4 +514,17 @@ func (st State) IsFresh(maxAge time.Duration) bool {
 	}
 	t, err := time.Parse(time.RFC3339, st.SyncedAt)
 	return err == nil && time.Since(t) < maxAge
+}
+
+// truncateRunes shortens s to at most max bytes without splitting a UTF-8
+// character, adding an ellipsis when it cut anything.
+func truncateRunes(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max - 3 // room for the 3-byte ellipsis
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(s[:cut]) + "…"
 }
