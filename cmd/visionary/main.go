@@ -199,6 +199,9 @@ func main() {
 			fail(errors.New("a guard is already running (service or another terminal)"))
 		}
 		fmt.Println(bold("Visionary real-time protection") + dim("  — Ctrl+C to stop"))
+		if pct, err := a.CapGuardCPU(); err == nil && pct > 0 {
+			fmt.Println(dim(fmt.Sprintf("CPU limited to %d%% of the machine", pct)))
+		}
 		check(a.RunGuard(interruptible(), func(s string) {
 			fmt.Println(dim(time.Now().Format("15:04:05")), s)
 		}))

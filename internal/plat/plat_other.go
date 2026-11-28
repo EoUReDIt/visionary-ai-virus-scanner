@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -94,8 +95,20 @@ func ListProcesses() ([]Proc, error) {
 	return out, nil
 }
 
-func FullscreenAppActive() bool     { return false }
-func SetBackgroundPriority(bool)    {}
+func FullscreenAppActive() bool  { return false }
+func SetBackgroundPriority(bool) {}
+
+// CapProcessCPU is only enforced on Windows (job-object rate control).
+func CapProcessCPU(int) error { return ErrUnsupported }
+
+// ProcessCPUTime is the user plus system CPU time this process has used.
+func ProcessCPUTime() time.Duration {
+	var ru syscall.Rusage
+	if syscall.Getrusage(syscall.RUSAGE_SELF, &ru) != nil {
+		return 0
+	}
+	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
+}
 func AutorunBinaries() []string     { return nil }
 func ScheduleBootTask(string) error { return ErrUnsupported }
 func RemoveBootTask() error         { return ErrUnsupported }

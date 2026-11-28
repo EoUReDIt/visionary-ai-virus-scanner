@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,22 @@ func msOr(ms int, def time.Duration) time.Duration {
 		return time.Duration(ms) * time.Millisecond
 	}
 	return def
+}
+
+// CapGuardCPU applies the configured operating-system CPU ceiling to this
+// process (Lite: 10% of the machine unless settings say otherwise). Call it
+// from a process that only hosts the guard, such as the service or
+// `visionary guard`, not from the dashboard. It returns the percentage applied.
+func (a *App) CapGuardCPU() (int, error) {
+	pct := a.Config().GuardCPUCap()
+	if pct <= 0 {
+		return 0, nil
+	}
+	if err := plat.CapProcessCPU(pct); err != nil {
+		return 0, err
+	}
+	a.Log("system", "info", fmt.Sprintf("Guard CPU limited to %d%% of the machine", pct), nil)
+	return pct, nil
 }
 
 // RunGuard is real-time protection. It runs until ctx is cancelled and is
@@ -67,8 +84,10 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 		recent   = map[string]time.Time{}
 		backoff  = newRescanBackoff(time.Duration(a.Config().Realtime.BackoffS) * time.Second)
 		burst    int
-		wasOn    = true
-		gaming   bool
+		// Work counters for the once-a-minute CPU report.
+		nEvents, nQueued, nExec, nPolls int
+		wasOn                           = true
+		gaming                          bool
 	)
 	closeWatcher := func() {
 		if watcher != nil {
@@ -113,6 +132,7 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	var lastProc, lastCfg, lastSlow, lastBurst, lastBeat time.Time
+	var lastCPU time.Duration
 
 	for {
 		select {
@@ -276,6 +296,21 @@ func (a *App) RunGuard(ctx context.Context, verbose func(string)) error {
 				burst = 0
 			}
 			if now.Sub(lastSlow) >= time.Minute {
+				if !lastSlow.IsZero() {
+					// Say where the time went when the guard is busy, so a
+					// high-CPU report names its cause instead of a guess.
+					used := plat.ProcessCPUTime()
+					share := 100 * float64(used-lastCPU) / float64(now.Sub(lastSlow)) / float64(runtime.NumCPU())
+					if share >= 25 {
+						a.Log("system", "warn", fmt.Sprintf(
+							"Guard used %.0f%% CPU over the last minute: %d file events, %d files scanned, %d process starts scanned, %d process polls",
+							share, nEvents, nQueued, nExec, nPolls), nil)
+					}
+					lastCPU = used
+				} else {
+					lastCPU = plat.ProcessCPUTime()
+				}
+				nEvents, nQueued, nExec, nPolls = 0, 0, 0, 0
 				lastSlow = now
 				mon.Save()
 				a.Engine().Flush()
