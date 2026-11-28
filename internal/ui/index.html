@@ -686,6 +686,15 @@ section.on{display:block}
           <div id="rkIpOut"></div>
           <span class="cli">visionary risk ip &lt;public-ipv4&gt;</span>
         </div>
+
+        <h2>Outbound Connections Check (Shodan InternetDB · Opt-in)</h2>
+        <div class="card">
+          <div class="muted" style="margin-bottom:8px">Lists where this PC is talking right now. Private, loopback and other local destinations are dropped on your PC. Each remaining <b>public</b> remote IP (up to 25) is sent to Shodan InternetDB, so only run this if you are comfortable with that.</div>
+          <div class="row"><button class="b p" id="bRkOut">Check outbound connections</button></div>
+          <div class="meta-line" id="rkOutMeta" style="margin:8px 0"></div>
+          <div id="rkOutOut"></div>
+          <span class="cli">visionary risk outbound</span>
+        </div>
       </section>
 
       <!-- BEHAVIOUR -->
@@ -1670,6 +1679,31 @@ $("bRkIp").onclick = async e => {
   } catch (err) {
     toast(err.message, true);
     fill($("rkIpOut"), el("div", { class: "note t-warn" }, err.message));
+  } finally {
+    e.target.disabled = false;
+  }
+};
+
+$("bRkOut").onclick = async e => {
+  fill($("rkOutOut"), el("div", { class: "bar" }, el("i")));
+  try {
+    e.target.disabled = true;
+    const r = await api("/api/risk", { action: "outbound-check" });
+    $("rkOutMeta").textContent = r.connections + " connections · " + r.public_ips + " public IPs · " + r.looked_up + " looked up" + (r.skipped ? " · " + r.skipped + " not checked (cap)" : "");
+    fill($("rkOutOut"), (r.reports || []).map(x => {
+      const lvl = x.exposure ? x.exposure.risk_level : "";
+      const cls = lvl === "critical" ? "t-bad" : lvl === "elevated" ? "t-warn" : "t-ok";
+      return el("div", { class: "ai-box" },
+        el("div", { class: "ai-head" },
+          el("b", { style: "font-family:var(--mono)" }, x.ip),
+          el("span", { class: "st " + cls }, x.error ? "LOOKUP FAILED" : lvl ? lvl.toUpperCase() : "NOT CHECKED"),
+          el("span", { class: "meta-line" }, "port " + (x.remote_ports || []).join(", ") + ((x.processes || []).length ? " · " + x.processes.join(", ") : ""))),
+        x.exposure ? el("div", { class: "ai-summary" }, x.exposure.summary) : null,
+        x.error ? el("div", { class: "note t-warn" }, x.error) : null);
+    }));
+  } catch (err) {
+    toast(err.message, true);
+    fill($("rkOutOut"), el("div", { class: "note t-warn" }, err.message));
   } finally {
     e.target.disabled = false;
   }

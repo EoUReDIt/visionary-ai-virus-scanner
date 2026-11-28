@@ -827,6 +827,8 @@ func (s *server) risk(r *http.Request) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"total": total, "advisories": advs}, nil
+	case "outbound-check":
+		return s.a.CheckOutbound(ctx)
 	case "ip-check":
 		return s.a.CheckInternetDB(ctx, q.Value)
 	case "scan-guided":

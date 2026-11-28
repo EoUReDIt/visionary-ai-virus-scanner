@@ -57,7 +57,7 @@ const usage = `Visionary — antivirus with local and cloud AI
   visionary ai explain <file>
   visionary reputation provider [circl|virustotal|otx|both]
   visionary reputation set-key|clear-key [virustotal|otx] | sync-otx | scan [path] [--limit N]
-  visionary risk sync|guidance|search <query>|ip <public-ipv4>|provider [nvd|cisa-kev|custom]|set-key|clear-key
+  visionary risk sync|guidance|search <query>|ip <public-ipv4>|outbound|provider [nvd|cisa-kev|custom]|set-key|clear-key
 
   visionary quarantine list|restore <id> [--allow] [--to path]|delete <id>
   visionary allow list|add <path-or-sha256>|remove <item>
@@ -1290,6 +1290,40 @@ func cmdRisk(a *app.App, fs *flag.FlagSet, rest []string) {
 			}
 			fmt.Printf("  %-16s  CVSS %-4.1f  %-16s  %s\n", c.ID, c.CVSS, tag, c.Summary)
 		}
+	case "outbound":
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		res, err := a.CheckOutbound(ctx)
+		check(err)
+		if jsonOut {
+			emit(res)
+			return
+		}
+		ok("%d connections, %d public IPs, %d looked up in Shodan InternetDB", res.Connections, res.PublicIPs, res.Looked)
+		if res.Skipped > 0 {
+			fmt.Printf("  %s\n", dim(fmt.Sprintf("%d more public IPs not looked up (cap reached)", res.Skipped)))
+		}
+		for _, r := range res.Reports {
+			tag := dim("not checked")
+			switch {
+			case r.Error != "":
+				tag = yellow("lookup failed")
+			case r.Exposure != nil && r.Exposure.RiskLevel == "critical":
+				tag = red("CRITICAL")
+			case r.Exposure != nil && r.Exposure.RiskLevel == "elevated":
+				tag = yellow("ELEVATED")
+			case r.Exposure != nil:
+				tag = green("LOW")
+			}
+			ports := make([]string, len(r.Ports))
+			for i, p := range r.Ports {
+				ports[i] = fmt.Sprintf("%d", p)
+			}
+			fmt.Printf("  %-16s %-10s port %-10s %s\n", r.IP, tag, strings.Join(ports, ","), strings.Join(r.Processes, ", "))
+			if r.Exposure != nil && r.Exposure.RiskLevel != "low" {
+				fmt.Println("      " + r.Exposure.Summary)
+			}
+		}
 	case "ip":
 		rawIP := need(pos, 1, "a public IPv4 address")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1345,7 +1379,7 @@ func cmdRisk(a *app.App, fs *flag.FlagSet, rest []string) {
 		check(a.SetSecret("nvd", ""))
 		ok("NIST NVD API key removed (using keyless free tier: 5 req/30s)")
 	default:
-		fail(errors.New("usage: visionary risk status|sync|guidance|search <query> [--kev] [--severity CRITICAL|HIGH]|ip <public-ipv4>|provider [nvd|cisa-kev|custom]|set-key|clear-key"))
+		fail(errors.New("usage: visionary risk status|sync|guidance|search <query> [--kev] [--severity CRITICAL|HIGH]|ip <public-ipv4>|outbound|provider [nvd|cisa-kev|custom]|set-key|clear-key"))
 	}
 }
 
