@@ -4,7 +4,7 @@ Status: first implementation (this PR). Items marked *later* are not done yet.
 
 ## Goal
 A build that runs well on old laptops, handhelds and low-end gaming PCs: small binary, low idle
-RAM/CPU, no GPU use, no background model server. Same CLI-first rule: every Lite feature works
+RAM/CPU, no GPU use by default (opt-in budget GPU, see below), no background model server. Same CLI-first rule: every Lite feature works
 from the CLI before the dashboard.
 
 ## What is already CPU-only
@@ -21,10 +21,18 @@ Build: `go build -tags lite ./cmd/visionary` or `scripts/build.sh` -> `dist/visi
 2. **`lite` profile / defaults** (`config.ApplyLite`, also `visionary profile lite` on the full edition):
    1 scan worker, 1 real-time worker, 2 s settle delay, 3 s process poll, 32 MB file cap,
    AI budget 5, game mode auto.
-3. **CPU-only local AI** (`ai.local.cpu_only`, `threads`, `keep_alive`): Ollama gets `num_gpu=0`,
+3. **CPU-only local AI by default** (`ai.local.gpu = off`, alias `cpu_only`; `threads`, `keep_alive`): Ollama gets `num_gpu=0`,
    `num_thread`, a 4096 context and `keep_alive 2m` (unloads when idle); llama-server is started
    with `-ngl 0 -t N -c 4096`. Threads default to half the cores. Lite default ceiling 2B and
    default model `gemma3:1b`; `ai recommend` lists only models under the ceiling.
+   **Opt-in budget GPU**: `visionary ai gpu` probes the GPU (nvidia-smi, else PowerShell
+   `Win32_VideoController`; no libraries are bundled) and suggests `ai.local.gpu_layers` that fit in
+   70% of VRAM (cap with `ai.local.gpu_vram_mb`). Then
+   `visionary settings set ai.local.gpu on` and `ai.local.gpu_layers N` for partial offload (Ollama
+   `num_gpu=N`, llama-server `-ngl N`); the CPU keeps the remaining layers. `auto` leaves the choice
+   to the runtime. Windows reports at most 4 GB for `AdapterRAM`, so larger cards show as "unknown or
+   at least 4 GB". Game mode forces the CPU and unloads the model while a game is up. Vulkan builds of
+   llama.cpp are the practical route for budget AMD and Intel GPUs; CUDA covers NVIDIA only.
 4. **Budget check**: `scripts/idle-budget.sh` fails CI if the idle guard exceeds 40 MB RSS or 3% CPU
    (Linux); a Windows working-set check runs on the Windows job.
 5. **Installer**: `makensis -DLITE ...` builds the Lite installer with `visionary.exe` and

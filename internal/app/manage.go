@@ -177,7 +177,7 @@ func (a *App) ollama() *ai.Ollama {
 	if ep == "" || c.Provider == "llama-server" {
 		ep = "http://127.0.0.1:11434"
 	}
-	return &ai.Ollama{Endpoint: ep, ModelName: c.Model, Cfg: c}
+	return &ai.Ollama{Endpoint: ep, ModelName: c.Model, Cfg: c, ForceCPU: a.GameMode}
 }
 
 func (a *App) LocalModels(ctx context.Context) ([]ai.LocalModel, error) { return a.ollama().List(ctx) }
@@ -202,6 +202,16 @@ func (a *App) UseLocalModel(ctx context.Context, model string) (float64, error) 
 		}
 		return nil
 	})
+}
+
+// LocalModelParamsB asks Ollama for the selected model's size in billions of
+// parameters. It errors for llama-server or when Ollama is not reachable.
+func (a *App) LocalModelParamsB(ctx context.Context) (float64, error) {
+	c := a.Config().AI.Local
+	if c.Provider == "llama-server" || c.Model == "" {
+		return 0, errors.New("size unknown")
+	}
+	return a.ollama().ParamsB(ctx, c.Model)
 }
 
 func (a *App) PullLocalModel(ctx context.Context, model string, progress func(string)) (float64, error) {

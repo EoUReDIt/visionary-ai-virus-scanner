@@ -103,16 +103,34 @@ type Ollama struct {
 	Endpoint  string
 	ModelName string
 	Cfg       config.LocalAI
+	// ForceCPU, when set and true, overrides the GPU policy for this request
+	// (game mode: never take VRAM from a game).
+	ForceCPU func() bool
+}
+
+// cpuMode reports whether inference must stay off the GPU right now.
+func cpuMode(c config.LocalAI, force func() bool) bool {
+	return c.GPUMode() == "off" || (force != nil && force())
+}
+
+// gpuLayers is the explicit layer count to offload, or -1 to let the runtime decide.
+func gpuLayers(c config.LocalAI) int {
+	if c.GPUMode() == "on" && c.GPULayers > 0 {
+		return c.GPULayers
+	}
+	return -1
 }
 
 // options are the per-request model options; CPU-only mode pins the model off
 // the GPU and bounds the context to keep memory small.
 func (o *Ollama) options() map[string]any {
 	opts := map[string]any{"temperature": 0, "num_ctx": 8192}
-	if o.Cfg.CPUOnly {
+	if cpuMode(o.Cfg, o.ForceCPU) {
 		opts["num_gpu"] = 0
 		opts["num_thread"] = cpuThreads(o.Cfg.Threads)
 		opts["num_ctx"] = 4096
+	} else if n := gpuLayers(o.Cfg); n > 0 {
+		opts["num_gpu"] = n // partial offload: the GPU takes n layers, the CPU the rest
 	}
 	return opts
 }
@@ -304,8 +322,10 @@ func (o *Ollama) Load(ctx context.Context, model string, load bool) error {
 		}
 	}
 	body := map[string]any{"model": model, "keep_alive": keep}
-	if o.Cfg.CPUOnly {
+	if cpuMode(o.Cfg, o.ForceCPU) {
 		body["options"] = map[string]any{"num_gpu": 0, "num_thread": cpuThreads(o.Cfg.Threads), "num_ctx": 4096}
+	} else if n := gpuLayers(o.Cfg); n > 0 {
+		body["options"] = map[string]any{"num_gpu": n}
 	}
 	return postJSON(ctx, o.Endpoint+"/api/generate", body, nil)
 }
@@ -318,6 +338,7 @@ func (o *Ollama) Load(ctx context.Context, model string, load bool) error {
 type LlamaServer struct {
 	Endpoint  string
 	Cfg       config.LocalAI
+	ForceCPU  func() bool // see Ollama.ForceCPU
 	mu        sync.Mutex
 	cmd       *exec.Cmd
 	idleTimer *time.Timer
@@ -342,7 +363,7 @@ func (l *LlamaServer) idleDuration() time.Duration {
 			return d
 		}
 	}
-	if l.Cfg.CPUOnly {
+	if l.Cfg.GPUMode() == "off" {
 		return 2 * time.Minute
 	}
 	return 15 * time.Minute
@@ -434,9 +455,11 @@ func (l *LlamaServer) Ensure(ctx context.Context) error {
 // to the GPU, bounds threads and context, and keeps the model out of swap.
 func (l *LlamaServer) args(port string) []string {
 	a := []string{"-m", l.Cfg.ModelPath, "--host", "127.0.0.1", "--port", port, "-c", "8192"}
-	if l.Cfg.CPUOnly {
+	if cpuMode(l.Cfg, l.ForceCPU) {
 		a = []string{"-m", l.Cfg.ModelPath, "--host", "127.0.0.1", "--port", port, "-c", "4096",
 			"-ngl", "0", "-t", strconv.Itoa(cpuThreads(l.Cfg.Threads))}
+	} else if n := gpuLayers(l.Cfg); n > 0 {
+		a = append(a, "-ngl", strconv.Itoa(n))
 	}
 	return a
 }
